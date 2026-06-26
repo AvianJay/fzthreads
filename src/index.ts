@@ -110,7 +110,7 @@ app.use((err: any, _req: Request, res: Response, _next: Function) => {
 
 app.get("/", async (_req: Request, res: Response, _next: Function) => {
   try {
-    res.status(301).redirect("https://youtu.be/xvFZjo5PgG0");
+    res.status(301).redirect("https://github.com/AvianJay/fzthreads");
   } catch (e: any) {
     res.status(500).json({
       error: true,
@@ -122,7 +122,7 @@ app.get("/", async (_req: Request, res: Response, _next: Function) => {
 
 app.get("/about", async (_req: Request, res: Response, _next: Function) => {
   try {
-    res.status(301).redirect("https://github.com/milanmdev/fixthreads");
+    res.status(301).redirect("https://youtu.be/xvFZjo5PgG0");
   } catch (e: any) {
     res.status(500).json({
       error: true,
