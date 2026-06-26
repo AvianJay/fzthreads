@@ -42,6 +42,9 @@ build/Release
 node_modules/
 jspm_packages/
 
+# Build output
+lib/
+
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
 
@@ -65,6 +68,7 @@ web_modules/
 
 # Optional REPL history
 .node_repl_history
+.bash_history
 
 # Output of 'npm pack'
 *.tgz

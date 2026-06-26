@@ -3,6 +3,7 @@
     "id": 1,
     "username": "USERNAME",
     "password": "PASSWORD",
-    "deviceId": "DEVICE_ID"
+    "deviceId": "DEVICE_ID",
+    "token": "BEARER_TOKEN"
   }
 ]

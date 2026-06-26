@@ -9,7 +9,7 @@ function rateLimit(options: Options) {
   return rateLimitPkg({
     windowMs: options.windowMs,
     max: options.max,
-    handler: function (req, res) {
+    handler: function (_req, res) {
       res.status(429).json({
         error: true,
         message: "Too many requests",

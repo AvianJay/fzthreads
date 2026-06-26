@@ -1,16 +1,17 @@
 import express from "express";
-import { HttpError } from "../utils/utils";
+import { HttpError, getThreadsUrl } from "../utils/utils";
 import findUser from "../utils/fetch/findUser";
 import renderSeo from "../utils/renderSeo";
-const router = express.Router();
+const router: express.Router = express.Router();
 
 router.get("/@:username", async (req, res, next) => {
+  const username = req.params.username;
   try {
-    if (!req.params.username)
+    if (!username)
       return next(new HttpError(400, "No user provided"));
 
     const user = await findUser({
-      username: req.params.username,
+      username: username,
       userAgent: req.headers["user-agent"] || "",
     });
     if (!user || !user.title) {
@@ -24,10 +25,10 @@ router.get("/@:username", async (req, res, next) => {
       })
     );
   } catch (e: any) {
-    res.status(500).json({
-      error: true,
-      message: e.message,
-    });
+    if (username) {
+        return res.redirect(getThreadsUrl(username));
+    }
+    return res.redirect("/");
   }
 });
 

@@ -1,5 +1,8 @@
 import fetch from "node-fetch";
 import { login, refreshToken } from "./igLogin";
+import { formatNumber } from "../utils";
+
+const THREADS_ICON_URL = "/favicon.png";
 
 async function findUser({
   username,
@@ -15,13 +18,13 @@ async function findUser({
       "Accept-Encoding": "gzip, deflate, br",
       "Accept-Language": "en-US,en;q=0.5",
       "Cache-Control": "no-cache",
-      Connection: "	keep-alive",
+      Connection: "keep-alive",
       Host: "www.threads.com",
       Pragma: "no-cache",
-      "Sec-Fetch-Dest": "	document",
-      "Sec-Fetch-Mode": "	navigate",
-      "Sec-Fetch-Site": "	none",
-      "Sec-Fetch-User": "	?1",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-User": "?1",
       "Upgrade-Insecure-Requests": "1",
       "User-Agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/114.0",
@@ -105,17 +108,26 @@ async function findUser({
   let userObj = fetchThreadsAPIJson.data.user;
 
   /* Setup oEmbed */
-  let oembedStat = `👤 ${userObj.follower_count.toLocaleString()} follower${
-    (userObj.follower_count = 0 || userObj.follower_count) > 1 ? "s" : ""
-  }`;
+  let oembedStat = `👤 ${formatNumber(userObj.follower_count)} 個追蹤者`;
+  // ${
+  //   userObj.follower_count > 1 ? "s" : ""
+  // }
+  const authorName = userObj.full_name
+    ? `${userObj.full_name} (@${userObj.username})`
+    : `@${userObj.username}`;
 
   let returnJson = {
     description: userObj.biography,
-    title: `${userObj.full_name} (@${userObj.username}) on Threads`,
+    title: `Threads 上的 ${authorName}`,
     images: [{ url: userObj.profile_pic_url }],
     username,
     imageType: "single",
     oembedStat,
+    authorName,
+    authorUrl: `https://www.threads.com/@${userObj.username}`,
+    authorIcon: userObj.profile_pic_url,
+    footerName: "FzThreads",
+    footerIcon: THREADS_ICON_URL,
     video: [],
     userAgent,
   };
