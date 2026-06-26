@@ -1,12 +1,16 @@
 import escape from "escape-html";
-import { getThreadsUrl } from "./utils";
+import {
+  formatThreadsAuthorName,
+  getThreadsUrl,
+  normalizeThreadsUsername,
+} from "./utils";
 
 const APPLICATION_NAME = "fixthreads";
 const APPLICATION_WEBSITE = "https://github.com/milanmdev/fixthreads";
 
 function getDisplayName(content: ContentProps): string {
-  const username = content.username.replace(/^@/, "");
-  const authorName = content.authorName?.trim() || `@${username}`;
+  const username = normalizeThreadsUsername(content.username);
+  const authorName = formatThreadsAuthorName(content.authorName, username);
   const handleSuffix = ` (@${username})`;
 
   if (authorName.endsWith(handleSuffix)) {
@@ -198,7 +202,7 @@ function getMediaAttachments(content: ContentProps) {
 }
 
 export default function renderActivity(content: ContentProps) {
-  const username = content.username.replace(/^@/, "");
+  const username = normalizeThreadsUsername(content.username);
   const statusUrl = getLocalPostUrl(content, username);
   const profileUrl = getProfileUrl(content, username);
   const authorIcon = content.authorIcon || null;

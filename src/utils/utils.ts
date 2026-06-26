@@ -15,15 +15,68 @@ let GlobalVars = {
 
 const THREADS_POST_ALPHABET =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const THREADS_ACCOUNT_DOMAIN_SUFFIX =
+  /@(?:www\.)?threads\.(?:com|net)$/i;
 
 function formatNumber(num: number): string {
   return num.toLocaleString();
 }
 
+function normalizeThreadsUsername(username: string): string {
+  return username
+    .trim()
+    .replace(/^@+/, "")
+    .replace(THREADS_ACCOUNT_DOMAIN_SUFFIX, "");
+}
+
+function stripThreadsAuthorHandleSuffix(
+  authorName: string,
+  username: string
+): string {
+  const normalizedUsername = normalizeThreadsUsername(username);
+  const trimmedAuthorName = authorName.trim();
+  const suffixes = [
+    ` (@${normalizedUsername})`,
+    ` (@${normalizedUsername}@www.threads.com)`,
+    ` (@${normalizedUsername}@threads.com)`,
+    ` (@${normalizedUsername}@www.threads.net)`,
+    ` (@${normalizedUsername}@threads.net)`,
+  ];
+  const matchedSuffix = suffixes.find(suffix =>
+    trimmedAuthorName.toLowerCase().endsWith(suffix.toLowerCase())
+  );
+
+  if (!matchedSuffix) return trimmedAuthorName;
+
+  return trimmedAuthorName.slice(0, -matchedSuffix.length).trim();
+}
+
+function formatThreadsAuthorName(
+  authorName: string | null | undefined,
+  username: string
+): string {
+  const normalizedUsername = normalizeThreadsUsername(username);
+  const trimmedAuthorName = authorName?.trim() || "";
+
+  if (!trimmedAuthorName) return `@${normalizedUsername}`;
+
+  const displayName = stripThreadsAuthorHandleSuffix(
+    trimmedAuthorName,
+    normalizedUsername
+  );
+  const normalizedDisplayName = normalizeThreadsUsername(displayName);
+
+  if (
+    normalizedDisplayName.toLowerCase() === normalizedUsername.toLowerCase()
+  ) {
+    return normalizedUsername;
+  }
+
+  return `${displayName} (@${normalizedUsername})`;
+}
+
 function getThreadsUrl(username: string, postCode?: string): string {
-  const normalizedUsername = username.startsWith("@")
-    ? username
-    : `@${username}`;
+  const normalizedUsername = `@${normalizeThreadsUsername(username)}`;
   return `https://www.threads.com/${normalizedUsername}${postCode ? `/post/${postCode}` : ""}`;
 }
 
@@ -64,7 +117,9 @@ export {
   HttpError,
   GlobalVars,
   formatNumber,
+  formatThreadsAuthorName,
   getThreadsUrl,
+  normalizeThreadsUsername,
   normalizeThreadsPostCode,
   encodeThreadsPostCode,
   decodeThreadsPostId,

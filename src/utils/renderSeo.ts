@@ -1,5 +1,9 @@
 import escape from "escape-html";
-import { getThreadsUrl } from "./utils";
+import {
+  formatThreadsAuthorName,
+  getThreadsUrl,
+  normalizeThreadsUsername,
+} from "./utils";
 
 const proxies = process.env.PROXIES?.split(",") || [];
 
@@ -87,7 +91,7 @@ function getLocalPlayerUrl(content: ContentProps) {
   const activityOrigin = getActivityOrigin(content.activityUrl);
   if (!activityOrigin || !content.post) return "";
 
-  return `${activityOrigin}/@${content.username.replace(/^@/, "")}/post/${
+  return `${activityOrigin}/@${normalizeThreadsUsername(content.username)}/post/${
     content.post
   }/player`;
 }
@@ -118,15 +122,24 @@ function getAbsoluteUrl(url: string, baseUrl: string) {
   }
 }
 
+function getSeoTitle(content: ContentProps, authorName: string) {
+  if (!content.title) return "FzThreads";
+  if (!content.authorName) return content.title;
+
+  return content.title.replace(content.authorName, authorName);
+}
+
 export default function renderSeo({ type, content }: DataProps) {
   if (!type || !content) {
     return "No type/content provided - this is not expected so if you're a client, report this to GitHub.";
   }
 
-  const url = getThreadsUrl(content.username, content.post);
-  const authorUrl = content.authorUrl || getThreadsUrl(content.username);
-  const authorName = escape(content.authorName || `@${content.username}`);
-  const authorHandle = `@${content.username.replace(/^@/, "")}`;
+  const username = normalizeThreadsUsername(content.username);
+  const url = getThreadsUrl(username, content.post);
+  const authorUrl = content.authorUrl || getThreadsUrl(username);
+  const rawAuthorName = formatThreadsAuthorName(content.authorName, username);
+  const authorName = escape(rawAuthorName);
+  const authorHandle = `@${username}`;
   const authorIcon = content.authorIcon || content.images?.[0]?.url || "";
   const footerName = "FzThreads";
   const footerIcon = content.footerIcon || DEFAULT_THREADS_ICON_URL;
@@ -137,7 +150,7 @@ export default function renderSeo({ type, content }: DataProps) {
   const appleTouchIcon = DEFAULT_THREADS_TOUCH_ICON_URL;
   const footerIconMimeType = getIconMimeType(footerIcon);
   const footerFaviconMimeType = getIconMimeType(footerFavicon);
-  const escapedTitle = escape(content.title || "FzThreads");
+  const escapedTitle = escape(getSeoTitle(content, rawAuthorName));
   const publishedTime = content.publishedTime
     ? escape(content.publishedTime)
     : "";
@@ -159,7 +172,7 @@ export default function renderSeo({ type, content }: DataProps) {
   const oembedUrl = `${oembedBaseUrl}/oembed?url=${encodeURIComponent(
     url
   )}&title=${encodeURIComponent("Embed")}&authorName=${encodeURIComponent(
-    content.authorName || `@${content.username}`
+    rawAuthorName
   )}&authorUrl=${encodeURIComponent(url)}&authorIcon=${encodeURIComponent(
     authorIcon
   )}&providerName=${encodeURIComponent(

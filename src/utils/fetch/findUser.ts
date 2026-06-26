@@ -1,6 +1,10 @@
 import fetch from "node-fetch";
 import { login, refreshToken } from "./igLogin";
-import { formatNumber } from "../utils";
+import {
+  formatNumber,
+  formatThreadsAuthorName,
+  normalizeThreadsUsername,
+} from "../utils";
 
 const THREADS_ICON_URL = "/favicon.png";
 
@@ -11,7 +15,8 @@ async function findUser({
   username: string;
   userAgent: string;
 }) {
-  let postResText: any = await fetch(`https://www.threads.com/@${username}`, {
+  const normalizedUsername = normalizeThreadsUsername(username);
+  let postResText: any = await fetch(`https://www.threads.com/@${normalizedUsername}`, {
     headers: {
       Accept:
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -112,19 +117,23 @@ async function findUser({
   // ${
   //   userObj.follower_count > 1 ? "s" : ""
   // }
-  const authorName = userObj.full_name
-    ? `${userObj.full_name} (@${userObj.username})`
-    : `@${userObj.username}`;
+  const profileUsername = normalizeThreadsUsername(
+    userObj.username || normalizedUsername
+  );
+  const authorName = formatThreadsAuthorName(
+    userObj.full_name,
+    profileUsername
+  );
 
   let returnJson = {
     description: userObj.biography,
     title: `Threads 上的 ${authorName}`,
     images: [{ url: userObj.profile_pic_url }],
-    username,
+    username: profileUsername,
     imageType: "single",
     oembedStat,
     authorName,
-    authorUrl: `https://www.threads.com/@${userObj.username}`,
+    authorUrl: `https://www.threads.com/@${profileUsername}`,
     authorIcon: userObj.profile_pic_url,
     footerName: "FzThreads",
     footerIcon: THREADS_ICON_URL,

@@ -7,7 +7,9 @@ import {promisify} from "node:util";
 import { login, refreshToken } from "./igLogin";
 import {
   encodeThreadsPostCode,
+  formatThreadsAuthorName,
   formatNumber,
+  normalizeThreadsUsername,
   normalizeThreadsPostCode,
 } from "../utils";
 
@@ -1377,7 +1379,10 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
   /* Handle Captions */
   let caption = buildCaptionFromFragments(postObj.post);
   if (postIndex > 0) {
-    caption = `⤴️ 正在回覆 @${thread_items[postIndex - 1].post.user.username}\n\n${caption}`;
+    const replyUsername = normalizeThreadsUsername(
+      thread_items[postIndex - 1].post.user.username
+    );
+    caption = `⤴️ 正在回覆 @${replyUsername}\n\n${caption}`;
   }
   let description = caption;
 
@@ -1514,7 +1519,9 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
   };
   if (postAppInfo.share_info?.quoted_post != null) {
     quotedPost = {
-      username: postAppInfo.share_info.quoted_post.user.username,
+      username: normalizeThreadsUsername(
+        postAppInfo.share_info.quoted_post.user.username
+      ),
       caption: buildCaptionFromFragments(postAppInfo.share_info.quoted_post),
       quoted: true,
     };
@@ -1525,9 +1532,11 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
       quotedPost.caption;
   }
 
-  const authorName = postObj.post.user.full_name
-    ? `${postObj.post.user.full_name} (@${postObj.post.user.username})`
-    : `@${postObj.post.user.username}`;
+  const username = normalizeThreadsUsername(postObj.post.user.username);
+  const authorName = formatThreadsAuthorName(
+    postObj.post.user.full_name,
+    username
+  );
 
   let returnJson = {
     description,
@@ -1535,7 +1544,7 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     images,
     post,
     postId: postID,
-    username: postObj.post.user.username,
+    username,
     publishedTime,
     imageType: imgType,
     video,
@@ -1545,7 +1554,7 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     repostCount,
     sendCount,
     authorName,
-    authorUrl: `https://www.threads.com/@${postObj.post.user.username}`,
+    authorUrl: `https://www.threads.com/@${username}`,
     authorIcon: postObj.post.user.profile_pic_url,
     footerName: "Threads",
     footerIcon: THREADS_ICON_URL,
