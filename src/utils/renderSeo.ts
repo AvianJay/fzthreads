@@ -155,7 +155,7 @@ export default function renderSeo({ type, content }: DataProps) {
     ? escape(content.publishedTime)
     : "";
   const oembedBaseUrl =
-    getActivityOrigin(content.activityUrl) || "https://ft.avianjay.sbs";
+    getActivityOrigin(content.activityUrl) || "https://fzthreads.com";
   const oembedFooterIcon = getAbsoluteUrl(footerIcon, oembedBaseUrl);
   const videoUrl = getResolvedVideoUrl(content);
   const playerUrl = getLocalPlayerUrl(content);

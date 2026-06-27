@@ -23,6 +23,6 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["./**/*.ts", "./**/*.json"],
-  "exclude": ["node_modules/**/*", "lib/**/*"]
+  "include": ["package.json", "./src/**/*.ts"],
+  "exclude": ["node_modules/**/*", "lib/**/*", "config/**/*", "generated/**/*"]
 }

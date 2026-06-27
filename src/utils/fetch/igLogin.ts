@@ -12,14 +12,7 @@ let failedCredentials = new Map<string, number>();
 let runningLogin = false;
 let hasReadTokenFile = false;
 
-const TOKEN_PATH = path.join(
-  __dirname,
-  "..",
-  "..",
-  "..",
-  "generated",
-  "token.json"
-);
+const TOKEN_PATH = path.join(process.cwd(), "generated", "token.json");
 const RUNTIME_DEBUG_FILE = "./runtime-debug.log";
 const ROOT_USERS_PATH = path.join(process.cwd(), "config", "users.json");
 const LIB_USERS_PATH = path.join(process.cwd(), "lib", "config", "users.json");

@@ -4,6 +4,13 @@
     "username": "USERNAME",
     "password": "PASSWORD",
     "deviceId": "DEVICE_ID",
-    "token": "BEARER_TOKEN"
+    "token": "BEARER_TOKEN",
+    "cookies": {
+      "sessionid": "YOUR_SESSION_ID",
+      "csrftoken": "YOUR_CSRF_TOKEN",
+      "ds_user_id": "YOUR_USER_ID",
+      "mid": "YOUR_MID",
+      "ig_did": "YOUR_IG_DID"
+    }
   }
 ]
