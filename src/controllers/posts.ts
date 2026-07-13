@@ -1,4 +1,5 @@
 import express from "express";
+import fetch from "node-fetch";
 import findPost from "../utils/fetch/findPost";
 import renderActivity from "../utils/renderActivity";
 import renderPlayer from "../utils/renderPlayer";
@@ -11,6 +12,12 @@ import {
 } from "../utils/utils";
 
 const router: express.Router = express.Router();
+const THREADS_HOSTS = new Set([
+  "threads.com",
+  "www.threads.com",
+  "threads.net",
+  "www.threads.net",
+]);
 
 function getActivityStatusId(post: ContentProps) {
   if (post.activityStatusId) return post.activityStatusId;
@@ -69,6 +76,45 @@ function redirectToOriginalThreadsPost(
   }
 
   return res.redirect(getThreadsUrl(username));
+}
+
+function redirectToOriginalThreadsShare(
+  req: express.Request,
+  res: express.Response
+) {
+  const shareCode = req.params.shareCode;
+
+  if (typeof shareCode !== "string") return res.redirect("/");
+
+  return res.redirect(
+    `https://www.threads.com/share/${encodeURIComponent(shareCode)}/`
+  );
+}
+
+async function resolveThreadsShareCode(
+  shareCode: string,
+  userAgent: string
+): Promise<string | undefined> {
+  if (!/^[A-Za-z0-9_-]+$/.test(shareCode)) return;
+
+  const response = await fetch(
+    `https://www.threads.com/share/${encodeURIComponent(shareCode)}/`,
+    {
+      method: "HEAD",
+      redirect: "follow",
+      follow: 10,
+      signal: AbortSignal.timeout(10000),
+      headers: userAgent ? {"User-Agent": userAgent} : undefined,
+    }
+  );
+  const resolvedUrl = new URL(response.url);
+
+  if (!THREADS_HOSTS.has(resolvedUrl.hostname.toLowerCase())) return;
+
+  const pathMatch = resolvedUrl.pathname.match(
+    /^\/(?:@[^/]+\/post|t)\/([A-Za-z0-9_-]+)\/?$/
+  );
+  return pathMatch?.[1];
 }
 
 function wantsActivityJson(req: express.Request) {
@@ -164,6 +210,36 @@ async function handlePostRequest(
   }
 }
 
+async function handleShareRequest(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  try {
+    const shareCode = req.params.shareCode;
+    if (!shareCode) return next(new HttpError(400, "No share code provided"));
+
+    const resolvedPost = await resolveThreadsShareCode(
+      String(shareCode),
+      req.headers["user-agent"] || ""
+    );
+    if (!resolvedPost) return redirectToOriginalThreadsShare(req, res);
+
+    const post = await findPost({
+      post: resolvedPost,
+      userAgent: req.headers["user-agent"] || "",
+    });
+
+    if (!post || !post.title) {
+      return next(new HttpError(404, "Post not found"));
+    }
+
+    return sendPostResponse(req, res, post);
+  } catch {
+    return redirectToOriginalThreadsShare(req, res);
+  }
+}
+
 async function handlePlayerRequest(
   req: express.Request,
   res: express.Response,
@@ -239,6 +315,7 @@ router.get("/t/:post/activity", handleActivityRequest);
 router.get("/:username/post/:post/activity", handleActivityRequest);
 router.get("/t/:post/player", handlePlayerRequest);
 router.get("/:username/post/:post/player", handlePlayerRequest);
+router.get("/share/:shareCode", handleShareRequest);
 router.get("/t/:post", handlePostRequest);
 router.get("/:username/post/:post", handlePostRequest);
 
