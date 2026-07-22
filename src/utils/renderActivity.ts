@@ -125,6 +125,16 @@ function getProfileUrl(content: ContentProps, username: string): string {
   return content.authorUrl || getThreadsUrl(username);
 }
 
+// Discord derives the fediverse handle (@user@domain) by parsing account.url
+// as a Mastodon profile URL (https://host/@user). Pointing it at a post URL
+// without an @-segment prevents that, so the embed shows a bare @username —
+// same trick as FxEmbed. Falls back to the profile URL when there is no post.
+function getAccountUrl(content: ContentProps, username: string): string {
+  if (content.post) return `https://www.threads.com/t/${content.post}`;
+
+  return getProfileUrl(content, username);
+}
+
 function getActivityOrigin(content: ContentProps): string | undefined {
   if (!content.activityUrl) return;
 
@@ -217,7 +227,7 @@ function getMediaAttachments(content: ContentProps) {
 export default function renderActivity(content: ContentProps) {
   const username = normalizeThreadsUsername(content.username);
   const statusUrl = getLocalPostUrl(content, username);
-  const profileUrl = getProfileUrl(content, username);
+  const accountUrl = getAccountUrl(content, username);
   const authorIcon = content.authorIcon || null;
   const displayName = getDisplayName(content);
   const activityId =
@@ -260,7 +270,8 @@ export default function renderActivity(content: ContentProps) {
       username,
       acct: username,
       note: "",
-      url: profileUrl,
+      url: accountUrl,
+      uri: accountUrl,
       created_at: content.publishedTime || null,
       locked: false,
       bot: false,
