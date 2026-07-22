@@ -1077,7 +1077,9 @@ function getFragmentText(fragment: any): string {
 function buildCaptionFromFragments(post: any): string {
   const fragments = post?.text_post_app_info?.text_fragments?.fragments;
   if (!Array.isArray(fragments) || fragments.length === 0) {
-    return post?.caption?.text || "";
+    // Escape literal || everywhere so the only unescaped markers in the
+    // caption are the spoiler delimiters written below.
+    return escapeDiscordSpoilerText(post?.caption?.text || "");
   }
 
   return fragments
@@ -1089,7 +1091,7 @@ function buildCaptionFromFragments(post: any): string {
         return `||${escapeDiscordSpoilerText(text)}||`;
       }
 
-      return text;
+      return escapeDiscordSpoilerText(text);
     })
     .join("");
 }
@@ -1525,11 +1527,6 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
       caption: buildCaptionFromFragments(postAppInfo.share_info.quoted_post),
       quoted: true,
     };
-
-    description =
-      description +
-      `\n\n↪ 引用 @${quotedPost.username}\n> ` +
-      quotedPost.caption;
   }
 
   const username = normalizeThreadsUsername(postObj.post.user.username);

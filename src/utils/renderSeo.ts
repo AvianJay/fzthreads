@@ -1,5 +1,9 @@
 import escape from "escape-html";
 import {
+  appendQuoteToPlainText,
+  stripDiscordSpoilerMarkers,
+} from "./contentFormat";
+import {
   formatThreadsAuthorName,
   getThreadsUrl,
   normalizeThreadsUsername,
@@ -36,27 +40,6 @@ function truncateText(text: string, maxLength: number) {
   return `${text.slice(0, maxLength - 3).trimEnd()}...`;
 }
 
-function stripDiscordSpoilerMarkers(text: string) {
-  let result = "";
-
-  for (let i = 0; i < text.length; i++) {
-    if (text.startsWith("\\|\\|", i)) {
-      result += "||";
-      i += 3;
-      continue;
-    }
-
-    if (text.startsWith("||", i)) {
-      i += 1;
-      continue;
-    }
-
-    result += text[i];
-  }
-
-  return result;
-}
-
 function joinDescriptionParts(first: string, second: string) {
   if (first && second) return `${first}${DESCRIPTION_SEPARATOR}${second}`;
   return first || second;
@@ -70,11 +53,13 @@ function getEmbedDescription(content: ContentProps) {
         0
       )
     : MAX_DESCRIPTION_LENGTH;
-  const body = content.description
-    ? truncateText(content.description, maxBodyLength)
-    : "";
+  const body = appendQuoteToPlainText(
+    content.description || "",
+    content.quotedPost
+  );
+  const truncatedBody = body ? truncateText(body, maxBodyLength) : "";
 
-  return joinDescriptionParts(body, stats);
+  return joinDescriptionParts(truncatedBody, stats);
 }
 
 function getActivityOrigin(activityUrl?: string) {

@@ -1,5 +1,14 @@
 import escape from "escape-html";
 import {
+  HTML_BLANK_LINE,
+  QUOTE_PREFIX,
+  SPOILER_WARNING_TEXT,
+  appendQuoteToPlainText,
+  collectMentions,
+  renderRichTextHtml,
+  stripDiscordSpoilerMarkers,
+} from "./contentFormat";
+import {
   formatThreadsAuthorName,
   getThreadsUrl,
   normalizeThreadsUsername,
@@ -24,85 +33,89 @@ function getDisplayName(content: ContentProps): string {
   return authorName.replace(/^@/, "");
 }
 
-type SpoilerSegment = {
-  text: string;
-  isSpoiler: boolean;
-};
+function buildQuoteHtml(quotedPost: QuotedPostProps): {
+  html: string;
+  hasSpoiler: boolean;
+} {
+  const username = normalizeThreadsUsername(quotedPost.username);
+  const header = `<b>${QUOTE_PREFIX} <a href="${getThreadsUrl(
+    username
+  )}">@${escape(username)}</a></b>`;
+  const caption = quotedPost.caption.trim();
 
-function parseDiscordSpoilerSegments(text: string): SpoilerSegment[] {
-  const segments: SpoilerSegment[] = [];
-  let buffer = "";
-  let isSpoiler = false;
-
-  for (let i = 0; i < text.length; i++) {
-    if (text.startsWith("\\|\\|", i)) {
-      buffer += "||";
-      i += 3;
-      continue;
-    }
-
-    if (text.startsWith("||", i)) {
-      if (buffer) {
-        segments.push({
-          text: buffer,
-          isSpoiler,
-        });
-        buffer = "";
-      }
-      isSpoiler = !isSpoiler;
-      i += 1;
-      continue;
-    }
-
-    buffer += text[i];
+  if (!caption) {
+    return {html: `<blockquote>${header}</blockquote>`, hasSpoiler: false};
   }
 
-  if (buffer) {
-    segments.push({
-      text: buffer,
-      isSpoiler,
-    });
-  }
+  const body = renderRichTextHtml(caption);
 
-  return segments;
+  return {
+    html: `<blockquote>${header}${HTML_BLANK_LINE}${body.html}</blockquote>`,
+    hasSpoiler: body.hasSpoiler,
+  };
 }
 
-function renderDiscordSpoilersAsHtml(text: string): string {
-  return parseDiscordSpoilerSegments(text)
-    .map(segment => {
-      const html = escape(segment.text).replace(/\r?\n/g, "<br>");
-      if (!segment.isSpoiler) return html;
-
-      return `<span class="spoiler" data-spoiler="true" aria-label="Spoiler">${html}</span>`;
-    })
-    .join("");
-}
-
-function buildHtmlContent(content: ContentProps): string {
+function buildHtmlContent(content: ContentProps): {
+  html: string;
+  hasSpoiler: boolean;
+} {
   const parts: string[] = [];
+  let hasSpoiler = false;
   const description = content.description?.trim();
   const stats = content.oembedStat?.trim();
 
   if (description) {
-    parts.push(renderDiscordSpoilersAsHtml(description));
+    const main = renderRichTextHtml(description);
+    parts.push(main.html);
+    hasSpoiler = hasSpoiler || main.hasSpoiler;
+  }
+
+  if (content.quotedPost?.quoted && content.quotedPost.username) {
+    const quote = buildQuoteHtml(content.quotedPost);
+    parts.push(quote.html);
+    hasSpoiler = hasSpoiler || quote.hasSpoiler;
   }
 
   if (stats) {
     parts.push(`<b>${escape(stats)}</b>`);
   }
 
-  return parts.join("<br><br>");
+  return {html: parts.join(HTML_BLANK_LINE), hasSpoiler};
 }
 
 function buildPlainTextContent(content: ContentProps): string {
-  const description = content.description?.trim() || "";
+  const description = appendQuoteToPlainText(
+    content.description?.trim() || "",
+    content.quotedPost
+  );
   const stats = content.oembedStat?.trim() || "";
+  const combined =
+    description && stats ? `${description}\n\n${stats}` : description || stats;
 
-  if (description && stats) {
-    return `${description}\n\n${stats}`;
+  return stripDiscordSpoilerMarkers(combined);
+}
+
+function getMentions(content: ContentProps) {
+  const sources = [content.description || ""];
+
+  if (content.quotedPost?.quoted && content.quotedPost.username) {
+    sources.push(`@${content.quotedPost.username}`);
+    sources.push(content.quotedPost.caption || "");
   }
 
-  return description || stats;
+  const usernames = new Set<string>();
+  sources.forEach(source => {
+    collectMentions(source).forEach(username =>
+      usernames.add(normalizeThreadsUsername(username))
+    );
+  });
+
+  return [...usernames].map(username => ({
+    id: username,
+    username,
+    acct: username,
+    url: getThreadsUrl(username),
+  }));
 }
 
 function getProfileUrl(content: ContentProps, username: string): string {
@@ -209,7 +222,7 @@ export default function renderActivity(content: ContentProps) {
   const displayName = getDisplayName(content);
   const activityId =
     content.activityStatusId || content.postId || content.post || statusUrl;
-  const htmlContent = buildHtmlContent(content);
+  const {html: htmlContent, hasSpoiler} = buildHtmlContent(content);
   const plainTextContent = buildPlainTextContent(content);
 
   return {
@@ -219,8 +232,8 @@ export default function renderActivity(content: ContentProps) {
     created_at: content.publishedTime || null,
     content: htmlContent,
     text: plainTextContent,
-    spoiler_text: "",
-    sensitive: false,
+    spoiler_text: hasSpoiler ? SPOILER_WARNING_TEXT : "",
+    sensitive: hasSpoiler,
     language: null,
     visibility: "public",
     // replies_count: content.replyCount || 0,
@@ -268,7 +281,7 @@ export default function renderActivity(content: ContentProps) {
       roles: [],
       fields: [],
     },
-    mentions: [],
+    mentions: getMentions(content),
     tags: [],
     emojis: [],
     filtered: [],
