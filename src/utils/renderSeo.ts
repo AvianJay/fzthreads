@@ -121,6 +121,12 @@ export default function renderSeo({ type, content }: DataProps) {
 
   const username = normalizeThreadsUsername(content.username);
   const url = getThreadsUrl(username, content.post);
+  // Post-shaped URL without an /@user segment — Discord parses profile-shaped
+  // URLs (https://host/@user...) in the oembed author_url to build the
+  // @user@domain fediverse handle; the /t/ short URL gives it nothing to parse.
+  const oembedAuthorUrl = content.post
+    ? `https://www.threads.com/t/${content.post}`
+    : url;
   const authorUrl = content.authorUrl || getThreadsUrl(username);
   const rawAuthorName = formatThreadsAuthorName(content.authorName, username);
   const authorName = escape(rawAuthorName);
@@ -158,7 +164,7 @@ export default function renderSeo({ type, content }: DataProps) {
     url
   )}&title=${encodeURIComponent("Embed")}&authorName=${encodeURIComponent(
     rawAuthorName
-  )}&authorUrl=${encodeURIComponent(url)}&authorIcon=${encodeURIComponent(
+  )}&authorUrl=${encodeURIComponent(oembedAuthorUrl)}&authorIcon=${encodeURIComponent(
     authorIcon
   )}&providerName=${encodeURIComponent(
     content.footerName || "FzThreads"

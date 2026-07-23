@@ -125,16 +125,6 @@ function getProfileUrl(content: ContentProps, username: string): string {
   return content.authorUrl || getThreadsUrl(username);
 }
 
-// Discord derives the fediverse handle (@user@domain) by parsing account.url
-// as a Mastodon profile URL (https://host/@user). Pointing it at a post URL
-// without an @-segment prevents that, so the embed shows a bare @username —
-// same trick as FxEmbed. Falls back to the profile URL when there is no post.
-function getAccountUrl(content: ContentProps, username: string): string {
-  if (content.post) return `https://www.threads.com/t/${content.post}`;
-
-  return getProfileUrl(content, username);
-}
-
 function getActivityOrigin(content: ContentProps): string | undefined {
   if (!content.activityUrl) return;
 
@@ -153,6 +143,21 @@ function getLocalPostUrl(content: ContentProps, username: string): string {
   }
 
   return getThreadsUrl(username, content.post);
+}
+
+// Discord derives the fediverse handle (@user@domain) shown next to the author
+// from the profile-shaped (https://host/@user/...) URLs in the status JSON.
+// Like FxEmbed (which points url/uri/account.url/account.uri all at the plain
+// x.com status URL), every url/uri here uses the /t/<post> short URL instead,
+// leaving no @-segment for Discord to build a handle from.
+function getPostShortUrl(content: ContentProps): string | undefined {
+  if (!content.post) return;
+
+  return `https://www.threads.com/t/${content.post}`;
+}
+
+function getAccountUrl(content: ContentProps, username: string): string {
+  return getPostShortUrl(content) || getProfileUrl(content, username);
 }
 
 function getVideoMeta(video: VideoProps) {
@@ -226,7 +231,8 @@ function getMediaAttachments(content: ContentProps) {
 
 export default function renderActivity(content: ContentProps) {
   const username = normalizeThreadsUsername(content.username);
-  const statusUrl = getLocalPostUrl(content, username);
+  const statusUrl =
+    getPostShortUrl(content) || getLocalPostUrl(content, username);
   const accountUrl = getAccountUrl(content, username);
   const authorIcon = content.authorIcon || null;
   const displayName = getDisplayName(content);
@@ -238,7 +244,7 @@ export default function renderActivity(content: ContentProps) {
   return {
     id: activityId,
     url: statusUrl,
-    uri: content.activityUrl || statusUrl,
+    uri: statusUrl,
     created_at: content.publishedTime || null,
     content: htmlContent,
     text: plainTextContent,
