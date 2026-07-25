@@ -1,35 +1,18 @@
 import express from "express";
 import { Request, Response } from "express";
 import cors from "cors";
-import {appendFileSync} from "node:fs";
 import path from "node:path";
 import "dotenv/config";
 const cloudflare = require("cloudflare-express");
 
 import { HttpError } from "./utils/utils";
+import { debugLog } from "./utils/debugLog";
 import routes from "./controllers/index";
 const app: express.Express = express();
-const RUNTIME_DEBUG_FILE = "./runtime-debug.log";
 const STATIC_ASSET_DIR = path.resolve(process.cwd(), "public");
 const LOCAL_ICON_FILE = path.join(STATIC_ASSET_DIR, "favicon.png");
 
-function writeServerDebug(
-  step: string,
-  details?: Record<string, string | number | boolean | undefined | null>
-) {
-  try {
-    appendFileSync(
-      RUNTIME_DEBUG_FILE,
-      `${JSON.stringify({
-        time: new Date().toISOString(),
-        step,
-        ...details,
-      })}\n`
-    );
-  } catch (e) {
-    // Ignore runtime debug logging errors.
-  }
-}
+const writeServerDebug = debugLog;
 
 writeServerDebug("server:moduleLoaded", {
   argv: process.argv.join(" "),

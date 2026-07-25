@@ -1,5 +1,6 @@
 import fetch from "node-fetch";
 import { login, refreshToken } from "./igLogin";
+import {FINDUSER_FETCH_MS} from "./http";
 import {
   formatNumber,
   formatThreadsAuthorName,
@@ -17,6 +18,7 @@ async function findUser({
 }) {
   const normalizedUsername = normalizeThreadsUsername(username);
   let postResText: any = await fetch(`https://www.threads.com/@${normalizedUsername}`, {
+    signal: AbortSignal.timeout(FINDUSER_FETCH_MS),
     headers: {
       Accept:
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -59,6 +61,7 @@ async function findUser({
   let finalFormBody = formBody.join("&");
   let fetchThreadsAPI = await fetch(`https://www.threads.com/api/graphql`, {
     method: "POST",
+    signal: AbortSignal.timeout(FINDUSER_FETCH_MS),
     headers: {
       "Sec-Fetch-Mode": "cors",
       "Sec-Fetch-Site": " same-origin",
@@ -79,6 +82,7 @@ async function findUser({
       } else {
         let fetchWithAuth = await fetch(`https://www.threads.com/api/graphql`, {
           method: "POST",
+          signal: AbortSignal.timeout(FINDUSER_FETCH_MS),
           headers: {
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": " same-origin",

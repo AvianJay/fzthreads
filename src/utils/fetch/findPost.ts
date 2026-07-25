@@ -1,10 +1,19 @@
 import fetch from "node-fetch";
 import {execFile} from "node:child_process";
-import {randomUUID} from "node:crypto";
-import {appendFileSync} from "node:fs";
+import {createHash, randomUUID} from "node:crypto";
 import https from "node:https";
 import {promisify} from "node:util";
 import { login, refreshToken } from "./igLogin";
+import {debugLog} from "../debugLog";
+import {
+  Deadline,
+  GRAPHQL_POST_MS,
+  IG_BOOTSTRAP_MS,
+  LEGACY_QUERY_MS,
+  PAGE_CONTEXT_FETCH_MS,
+  TOTAL_BUDGET_MS,
+  signalFor,
+} from "./http";
 import {
   encodeThreadsPostCode,
   formatThreadsAuthorName,
@@ -20,12 +29,21 @@ const THREADS_LEGACY_POST_DOC_ID = "7448594591874178";
 const THREADS_DEFAULT_LSD = "hgmSkqDnLNFckqa7t1vJdn";
 const THREADS_BROWSER_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
-const THREADS_RUNTIME_DEBUG_FILE = "./runtime-debug.log";
 // Reduced from 3 to 1 for faster response (Discord crawler timeout is ~10s)
 const THREADS_POST_PAGE_MAX_ATTEMPTS = 1;
-// Quick timeout for initial requests - will fallback to faster methods if fails
-const THREADS_QUICK_TIMEOUT_MS = 8_000;
-const FIND_POST_CACHE_TTL_MS = 60 * 1000;
+const POST_CACHE_SUCCESS_TTL_MS = Number(process.env.POST_CACHE_SUCCESS_TTL_MS) || 5 * 60 * 1000;
+// Failures must expire quickly: a deadline-induced false would otherwise
+// poison the link for the whole success TTL.
+const POST_CACHE_FAILURE_TTL_MS = Number(process.env.POST_CACHE_FAILURE_TTL_MS) || 30 * 1000;
+const MAX_POST_CACHE_ENTRIES = 1000;
+const PAGE_CONTEXT_FRESH_MS = Number(process.env.PAGE_CONTEXT_FRESH_MS) || 10 * 60 * 1000;
+const PAGE_CONTEXT_STALE_MAX_MS = 60 * 60 * 1000;
+// Background refresh of a stale context gets its own generous budget
+// instead of the request deadline.
+const PAGE_CONTEXT_BACKGROUND_FETCH_MS = 8_000;
+const PAGE_CONTEXT_INVALIDATE_COOLDOWN_MS = 15_000;
+const IG_BOOTSTRAP_CACHE_MS = 60 * 60 * 1000;
+const LOGIN_COOKIE_CACHE_MS = 60 * 1000;
 const THREADS_WEB_SESSION_ID_LENGTH = 6;
 const THREADS_SEC_CH_UA =
   '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"';
@@ -51,6 +69,45 @@ const findPostInflight = new Map<
   string,
   Promise<Omit<ContentProps, "userAgent"> | false>
 >();
+// Session-scoped page context (LSD token, spin params, ...) cached per
+// host+credential. Only `referer` is post-specific and is rebuilt per request.
+const pageContextCache = new Map<
+  string,
+  {context: Omit<ThreadsPageContext, "referer">; fetchedAt: number}
+>();
+const pageContextInflight = new Map<
+  string,
+  Promise<Omit<ThreadsPageContext, "referer"> | undefined>
+>();
+const pageContextInvalidatedAt = new Map<string, number>();
+let igBootstrapCache:
+  | {header: string | undefined; fetchedAt: number}
+  | undefined;
+let igBootstrapInflight: Promise<string | undefined> | undefined;
+let loginCookieCache:
+  | {header: string | undefined; fetchedAt: number}
+  | undefined;
+
+function evictOldestEntries(map: Map<string, unknown>, maxEntries: number) {
+  while (map.size > maxEntries) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey === undefined) break;
+    map.delete(oldestKey);
+  }
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function getPageContextCacheKey(
+  targetHost: string,
+  externalCookieHeader?: string
+): string {
+  return `${targetHost}|${
+    externalCookieHeader ? `auth:${shortHash(externalCookieHeader)}` : "anon"
+  }`;
+}
 
 type ThreadsPageContext = {
   cookieHeader?: string;
@@ -82,23 +139,7 @@ type ThreadsPostPageQueryResult = {
   status: number;
 };
 
-function writeRuntimeDebug(
-  step: string,
-  details?: Record<string, string | number | boolean | undefined | null>
-) {
-  try {
-    appendFileSync(
-      THREADS_RUNTIME_DEBUG_FILE,
-      `${JSON.stringify({
-        time: new Date().toISOString(),
-        step,
-        ...details,
-      })}\n`
-    );
-  } catch (e) {
-    // Ignore debug logging errors.
-  }
-}
+const writeRuntimeDebug = debugLog;
 
 function getCount(...values: any[]): number {
   for (const value of values) {
@@ -184,38 +225,61 @@ function getCookieHeaderFromSetCookieHeaders(setCookieHeaders: string[]): string
   );
 }
 
-async function getInstagramBootstrapCookieHeader(): Promise<string | undefined> {
-  try {
-    const response = await fetch("https://www.instagram.com/", {
-      agent: THREADS_HTTPS_AGENT,
-      headers: {
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-        "User-Agent": THREADS_BROWSER_USER_AGENT,
-      },
-    });
-
-    const setCookieHeaders = response.headers.raw()["set-cookie"] || [];
-    const cookieHeader = getCookieHeaderFromSetCookieHeaders(setCookieHeaders);
-    const cookies = cookieHeader ? parseCookieSegments(cookieHeader) : new Map();
-    const mid = cookies.get("mid");
-    const igDid = cookies.get("ig_did") || THREADS_GENERATED_IG_DID;
-
-    return mergeCookieHeaders(
-      mid ? `mid=${mid}` : undefined,
-      `ig_did=${igDid}`,
-      "ig_nrcb=1"
-    );
-  } catch (e) {
-    writeRuntimeDebug("findPost:instagramBootstrap:error", {
-      message: e instanceof Error ? e.message : String(e),
-    });
-    return mergeCookieHeaders(
-      `ig_did=${THREADS_GENERATED_IG_DID}`,
-      "ig_nrcb=1"
-    );
+async function getInstagramBootstrapCookieHeader(
+  deadline?: Deadline
+): Promise<string | undefined> {
+  // The mid/ig_did bootstrap cookies are stable — fetch them once an hour
+  // instead of on every request.
+  if (
+    igBootstrapCache &&
+    Date.now() - igBootstrapCache.fetchedAt < IG_BOOTSTRAP_CACHE_MS
+  ) {
+    return igBootstrapCache.header;
   }
+
+  if (!igBootstrapInflight) {
+    igBootstrapInflight = (async () => {
+      try {
+        const response = await fetch("https://www.instagram.com/", {
+          agent: THREADS_HTTPS_AGENT,
+          signal: signalFor(deadline, IG_BOOTSTRAP_MS),
+          headers: {
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "User-Agent": THREADS_BROWSER_USER_AGENT,
+          },
+        });
+
+        const setCookieHeaders = response.headers.raw()["set-cookie"] || [];
+        const cookieHeader = getCookieHeaderFromSetCookieHeaders(setCookieHeaders);
+        const cookies = cookieHeader ? parseCookieSegments(cookieHeader) : new Map();
+        const mid = cookies.get("mid");
+        const igDid = cookies.get("ig_did") || THREADS_GENERATED_IG_DID;
+
+        const header = mergeCookieHeaders(
+          mid ? `mid=${mid}` : undefined,
+          `ig_did=${igDid}`,
+          "ig_nrcb=1"
+        );
+        igBootstrapCache = {header, fetchedAt: Date.now()};
+        return header;
+      } catch (e) {
+        writeRuntimeDebug("findPost:instagramBootstrap:error", {
+          message: e instanceof Error ? e.message : String(e),
+        });
+        // Don't cache the fallback header — retry the real fetch next time.
+        return mergeCookieHeaders(
+          `ig_did=${THREADS_GENERATED_IG_DID}`,
+          "ig_nrcb=1"
+        );
+      } finally {
+        igBootstrapInflight = undefined;
+      }
+    })();
+  }
+
+  return igBootstrapInflight;
 }
 
 // 輔助函數：使用登入 Cookie直接發送請求（在無法取得 LSD 時）
@@ -224,13 +288,14 @@ async function executePostQueryWithCookie(
   threadID: string,
   targetHost: string,
   cookieHeader: string,
-  authorization?: string
+  authorization?: string,
+  deadline?: Deadline
 ): Promise<ThreadsPostPageQueryResult | undefined> {
   const origin = `https://${targetHost}`;
   const referer = `${origin}/t/${threadID}`;
   const requestID = getRandomRequestID();
   const webSessionID = getRandomSessionID();
-  const bootstrapCookieHeader = await getInstagramBootstrapCookieHeader();
+  const bootstrapCookieHeader = await getInstagramBootstrapCookieHeader(deadline);
   const effectiveCookieHeader = mergeCookieHeaders(
     bootstrapCookieHeader,
     cookieHeader
@@ -275,6 +340,7 @@ async function executePostQueryWithCookie(
     const response = await fetch(`${origin}/graphql/query`, {
       agent: THREADS_HTTPS_AGENT,
       method: "POST",
+      signal: signalFor(deadline, GRAPHQL_POST_MS),
       headers: {
         Accept: "*/*",
         "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -346,6 +412,7 @@ async function executeThreadsPostPageQueryWithCurl({
   referer,
   targetHost,
   webBloksVersionId,
+  deadline,
 }: {
   cookieHeader?: string;
   loginCookieHeader?: string;
@@ -356,7 +423,19 @@ async function executeThreadsPostPageQueryWithCurl({
   referer: string;
   targetHost: string;
   webBloksVersionId?: string;
+  deadline?: Deadline;
 }): Promise<ThreadsPostPageQueryResult | undefined> {
+  if (deadline && deadline.remaining() < 2000) {
+    writeRuntimeDebug("findPost:postPageQuery:curlSkippedDeadline", {
+      host: targetHost,
+      remainingMs: deadline.remaining(),
+    });
+    return;
+  }
+
+  const curlMaxTimeSeconds = deadline
+    ? Math.max(1, Math.min(6, Math.ceil(deadline.remaining() / 1000)))
+    : 6;
   // 合併頁面 cookie 和登入 cookie
   const effectiveCookieHeader = mergeCookieHeaders(cookieHeader, loginCookieHeader);
   const origin = `https://${targetHost}`;
@@ -364,7 +443,7 @@ async function executeThreadsPostPageQueryWithCurl({
     "-sS",
     "--compressed",
     "--max-time",
-    "20",
+    String(curlMaxTimeSeconds),
     "--request",
     "POST",
     `${origin}/graphql/query`,
@@ -438,7 +517,7 @@ async function executeThreadsPostPageQueryWithCurl({
   try {
     const {stdout} = await execFileAsync("curl", args, {
       maxBuffer: 8 * 1024 * 1024,
-      timeout: 25_000,
+      timeout: 8_000,
     });
     const statusMarker = "\n__CURL_STATUS__:";
     const markerIndex = stdout.lastIndexOf(statusMarker);
@@ -543,41 +622,105 @@ function hasPostData(responseJson: any): boolean {
   );
 }
 
-async function getThreadsPageContext(
+async function fetchThreadsPageContext(
   threadID: string,
   targetHost: string,
-  externalCookieHeader?: string
-): Promise<ThreadsPageContext | undefined> {
+  externalCookieHeader?: string,
+  fetchTimeoutMs: number = PAGE_CONTEXT_FETCH_MS,
+  deadline?: Deadline
+): Promise<Omit<ThreadsPageContext, "referer"> | undefined> {
+  // Redirects are followed manually with a cookie jar: Meta's 302s set
+  // cookies that must be sent on the next hop, otherwise a cookie'd fetch
+  // loops on "/" forever (node-fetch does not accumulate Set-Cookie across
+  // redirects).
   const fetchPage = async (cookieHeader?: string) => {
-    const response = await fetch(`https://${targetHost}/t/${threadID}`, {
-      agent: THREADS_HTTPS_AGENT,
-      headers: {
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-        "User-Agent": THREADS_BROWSER_USER_AGENT,
-        ...(cookieHeader ? {Cookie: cookieHeader} : {}),
-      },
-    });
+    const jar = cookieHeader ? parseCookieSegments(cookieHeader) : new Map<string, string>();
+    const jarHeader = () =>
+      jar.size > 0
+        ? Array.from(jar.entries())
+            .map(([key, value]) => `${key}=${value}`)
+            .join("; ")
+        : undefined;
 
-    return {
-      response,
-      html: await response.text(),
-    };
+    let url = `https://${targetHost}/t/${threadID}`;
+    for (let hop = 0; hop < 5; hop++) {
+      const currentJarHeader = jarHeader();
+      const response = await fetch(url, {
+        agent: THREADS_HTTPS_AGENT,
+        signal: signalFor(deadline, fetchTimeoutMs),
+        redirect: "manual",
+        headers: {
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+          "User-Agent": THREADS_BROWSER_USER_AGENT,
+          ...(currentJarHeader ? {Cookie: currentJarHeader} : {}),
+        },
+      });
+
+      const setCookieHeaders = response.headers.raw()["set-cookie"] || [];
+      for (const setCookieHeader of setCookieHeaders) {
+        for (const [key, value] of parseCookieSegments(
+          setCookieHeader.split(";")[0] || ""
+        )) {
+          jar.set(key, value);
+        }
+      }
+
+      const location = response.headers.get("location");
+      if (response.status >= 300 && response.status < 400 && location) {
+        url = new URL(location, url).href;
+        continue;
+      }
+
+      return {
+        response,
+        html: await response.text(),
+        accumulatedCookieHeader: jarHeader(),
+      };
+    }
+
+    throw new Error(`maximum redirect reached at: ${url}`);
   };
 
   try {
     let postPageResponse;
     let postPageHtml;
+    let pageCookieHeader: string | undefined;
     let usedExternalCookie = false;
 
     if (externalCookieHeader) {
-      ({response: postPageResponse, html: postPageHtml} = await fetchPage(
-        externalCookieHeader
-      ));
-      usedExternalCookie = true;
+      try {
+        ({
+          response: postPageResponse,
+          html: postPageHtml,
+          accumulatedCookieHeader: pageCookieHeader,
+        } = await fetchPage(externalCookieHeader));
+        usedExternalCookie = true;
+      } catch (cookieFetchError) {
+        // An expired session cookie sends the page into a login redirect
+        // loop. The anonymous page's LSD token still works with login
+        // cookies attached to the GraphQL POST, so fall back to it.
+        writeRuntimeDebug("findPost:pageContext:cookieFetchFailed", {
+          host: targetHost,
+          threadID,
+          message:
+            cookieFetchError instanceof Error
+              ? cookieFetchError.message
+              : String(cookieFetchError),
+        });
+        ({
+          response: postPageResponse,
+          html: postPageHtml,
+          accumulatedCookieHeader: pageCookieHeader,
+        } = await fetchPage());
+      }
     } else {
-      ({response: postPageResponse, html: postPageHtml} = await fetchPage());
+      ({
+        response: postPageResponse,
+        html: postPageHtml,
+        accumulatedCookieHeader: pageCookieHeader,
+      } = await fetchPage());
     }
 
     let lsd = getStringMatch(
@@ -591,7 +734,11 @@ async function getThreadsPageContext(
         threadID,
         status: postPageResponse.status,
       });
-      ({response: postPageResponse, html: postPageHtml} = await fetchPage());
+      ({
+        response: postPageResponse,
+        html: postPageHtml,
+        accumulatedCookieHeader: pageCookieHeader,
+      } = await fetchPage());
       usedExternalCookie = false;
       lsd = getStringMatch(postPageHtml, /"LSD",\[\],\{"token":"([^"]+)"\}/);
     }
@@ -607,8 +754,7 @@ async function getThreadsPageContext(
       return;
     }
 
-    const setCookieHeaders = postPageResponse.headers.raw()["set-cookie"] || [];
-    const cookieHeader = getCookieHeaderFromSetCookieHeaders(setCookieHeaders);
+    const cookieHeader = pageCookieHeader;
 
     const csrfToken = cookieHeader
       ? getStringMatch(cookieHeader, /csrftoken=([^;]+)/)
@@ -626,7 +772,6 @@ async function getThreadsPageContext(
       hs,
       hsdp: getStringMatch(postPageHtml, /"__hsdp":"([^"]+)"/),
       lsd,
-      referer: postPageResponse.url,
       sjsp: getStringMatch(postPageHtml, /"__sjsp":"([^"]+)"/),
       siteData: {
         clientRevision: getStringMatch(
@@ -658,17 +803,128 @@ async function getThreadsPageContext(
   }
 }
 
+function startPageContextRefresh(
+  cacheKey: string,
+  threadID: string,
+  targetHost: string,
+  externalCookieHeader?: string
+): Promise<Omit<ThreadsPageContext, "referer"> | undefined> {
+  const inflight = pageContextInflight.get(cacheKey);
+  if (inflight) return inflight;
+
+  const refresh = fetchThreadsPageContext(
+    threadID,
+    targetHost,
+    externalCookieHeader,
+    PAGE_CONTEXT_BACKGROUND_FETCH_MS
+  )
+    .then(context => {
+      if (context) {
+        pageContextCache.set(cacheKey, {context, fetchedAt: Date.now()});
+        evictOldestEntries(pageContextCache, 50);
+      }
+      return context;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      pageContextInflight.delete(cacheKey);
+    });
+
+  pageContextInflight.set(cacheKey, refresh);
+  return refresh;
+}
+
+async function getThreadsPageContext(
+  threadID: string,
+  targetHost: string,
+  externalCookieHeader?: string,
+  deadline?: Deadline
+): Promise<ThreadsPageContext | undefined> {
+  const cacheKey = getPageContextCacheKey(targetHost, externalCookieHeader);
+  // The context is session-scoped, so any post's referer works with it.
+  const referer = `https://${targetHost}/t/${threadID}`;
+  const cached = pageContextCache.get(cacheKey);
+  const age = cached ? Date.now() - cached.fetchedAt : Infinity;
+
+  if (cached && age < PAGE_CONTEXT_FRESH_MS) {
+    return {...cached.context, referer};
+  }
+
+  if (cached && age < PAGE_CONTEXT_STALE_MAX_MS) {
+    void startPageContextRefresh(
+      cacheKey,
+      threadID,
+      targetHost,
+      externalCookieHeader
+    );
+    writeRuntimeDebug("findPost:pageContext:staleHit", {
+      host: targetHost,
+      ageMs: age,
+    });
+    return {...cached.context, referer};
+  }
+
+  const context = await (pageContextInflight.get(cacheKey) ??
+    fetchThreadsPageContext(
+      threadID,
+      targetHost,
+      externalCookieHeader,
+      PAGE_CONTEXT_FETCH_MS,
+      deadline
+    ).then(fetched => {
+      if (fetched) {
+        pageContextCache.set(cacheKey, {context: fetched, fetchedAt: Date.now()});
+        evictOldestEntries(pageContextCache, 50);
+      }
+      return fetched;
+    }));
+
+  if (!context) {
+    // The deadline-bounded fetch failed (Meta can take >4s on the
+    // cookie-authenticated page). Warm the cache in the background with the
+    // generous budget so the next request for any post succeeds fast.
+    void startPageContextRefresh(
+      cacheKey,
+      threadID,
+      targetHost,
+      externalCookieHeader
+    );
+    return undefined;
+  }
+
+  return {...context, referer};
+}
+
+function invalidatePageContext(
+  targetHost: string,
+  externalCookieHeader?: string
+) {
+  const cacheKey = getPageContextCacheKey(targetHost, externalCookieHeader);
+  const lastInvalidatedAt = pageContextInvalidatedAt.get(cacheKey) || 0;
+  if (Date.now() - lastInvalidatedAt < PAGE_CONTEXT_INVALIDATE_COOLDOWN_MS) {
+    return;
+  }
+
+  pageContextInvalidatedAt.set(cacheKey, Date.now());
+  pageContextCache.delete(cacheKey);
+  writeRuntimeDebug("findPost:pageContext:invalidated", {host: targetHost});
+}
+
 async function executeThreadsPostPageQuery(
   postID: string,
   threadID: string,
   targetHost: string,
   authorization?: string,
-  externalCookieHeader?: string
+  externalCookieHeader?: string,
+  deadline?: Deadline
 ): Promise<ThreadsPostPageQueryResult | undefined> {
+  if (deadline?.expired()) return;
+
   const pageContext = await getThreadsPageContext(
     threadID,
     targetHost,
-    externalCookieHeader
+    externalCookieHeader,
+    deadline
   );
 
   // 如果有登入 cookie 但頁面上下文獲取失敗，仍然嘗試用登入 cookie 發送請求
@@ -685,7 +941,8 @@ async function executeThreadsPostPageQuery(
       threadID,
       targetHost,
       externalCookieHeader,
-      authorization
+      authorization,
+      deadline
     );
   }
 
@@ -753,6 +1010,7 @@ async function executeThreadsPostPageQuery(
     const response = await fetch(`${origin}/graphql/query`, {
       agent: THREADS_HTTPS_AGENT,
       method: "POST",
+      signal: signalFor(deadline, GRAPHQL_POST_MS),
       headers: {
         Accept: "*/*",
         "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -809,7 +1067,10 @@ async function executeThreadsPostPageQuery(
   } = await sendPostPageQuery(cookieHeader);
 
   if (fetchThreadsAPI.status === 401 && !authorization) {
-    instagramBootstrapCookieHeader = await getInstagramBootstrapCookieHeader();
+    // The cached session context may have been rotated by Meta.
+    invalidatePageContext(targetHost, externalCookieHeader);
+    instagramBootstrapCookieHeader =
+      await getInstagramBootstrapCookieHeader(deadline);
     cookieHeader = mergeCookieHeaders(
       cookieHeader,
       responseCookieHeader,
@@ -817,7 +1078,7 @@ async function executeThreadsPostPageQuery(
       responseMid ? `mid=${responseMid}` : undefined
     );
 
-    if (cookieHeader) {
+    if (cookieHeader && !deadline?.expired()) {
       writeRuntimeDebug("findPost:postPageQuery:retryingWithResponseCookies", {
         postID,
         hadResponseMid: Boolean(responseMid),
@@ -838,6 +1099,10 @@ async function executeThreadsPostPageQuery(
     const responseMessage =
       typeof responseJson?.message === "string" ? responseJson.message : undefined;
 
+    if (responseJson?.errors?.[0]?.summary === "Not Logged In") {
+      invalidatePageContext(targetHost, externalCookieHeader);
+    }
+
     if (!authorization && fetchThreadsAPI.status === 401 && responseMessage) {
       writeRuntimeDebug("findPost:postPageQuery:tryingCurlFallback", {
         host: targetHost,
@@ -853,6 +1118,7 @@ async function executeThreadsPostPageQuery(
         referer,
         targetHost,
         webBloksVersionId,
+        deadline,
       });
 
       if (curlResult?.responseJson && hasPostData(curlResult.responseJson)) {
@@ -915,18 +1181,21 @@ async function fetchThreadsPostPageQuery(
   postID: string,
   threadID: string,
   authorization?: string,
-  cookieHeader?: string
+  cookieHeader?: string,
+  deadline?: Deadline
 ): Promise<any | undefined> {
   const primaryResult = await executeThreadsPostPageQuery(
     postID,
     threadID,
     "www.threads.com",
     authorization,
-    cookieHeader
+    cookieHeader,
+    deadline
   );
 
   const shouldTryThreadsNet =
     !authorization &&
+    !deadline?.expired() &&
     Boolean(
       primaryResult &&
         (primaryResult.status === 401 ||
@@ -948,7 +1217,8 @@ async function fetchThreadsPostPageQuery(
       threadID,
       "www.threads.net",
       authorization,
-      cookieHeader
+      cookieHeader,
+      deadline
     );
 
     if (
@@ -969,6 +1239,7 @@ async function fetchThreadsPostPageQueryWithRetries({
   authorization,
   cookieHeader,
   step,
+  deadline,
 }: {
   postCode: string;
   postID: string;
@@ -976,6 +1247,7 @@ async function fetchThreadsPostPageQueryWithRetries({
   authorization?: string;
   cookieHeader?: string;
   step: string;
+  deadline?: Deadline;
 }): Promise<any | undefined> {
   let lastResponse: any;
 
@@ -986,7 +1258,7 @@ async function fetchThreadsPostPageQueryWithRetries({
   const effectiveAuth = authorization?.startsWith("COOKIE:") ? undefined : authorization;
 
   for (let attempt = 1; attempt <= THREADS_POST_PAGE_MAX_ATTEMPTS; attempt++) {
-    lastResponse = await fetchThreadsPostPageQuery(postID, threadID, effectiveAuth, effectiveCookieHeader);
+    lastResponse = await fetchThreadsPostPageQuery(postID, threadID, effectiveAuth, effectiveCookieHeader, deadline);
     const hasData = hasPostData(lastResponse);
     const hasModernData = hasModernPostData(lastResponse, postCode);
 
@@ -1010,7 +1282,8 @@ async function fetchThreadsPostPageQueryWithRetries({
 
 async function fetchThreadsLegacyPostQuery(
   postID: string,
-  authorization?: string
+  authorization?: string,
+  deadline?: Deadline
 ): Promise<any> {
   const finalFormBody = encodeFormBody({
     variables: getLegacyPostVariables(postID),
@@ -1021,6 +1294,7 @@ async function fetchThreadsLegacyPostQuery(
   const fetchThreadsAPI = await fetch("https://www.threads.com/api/graphql", {
     agent: THREADS_HTTPS_AGENT,
     method: "POST",
+    signal: signalFor(deadline, LEGACY_QUERY_MS),
     headers: {
       "Sec-Fetch-Mode": "cors",
       "Sec-Fetch-Site": "same-origin",
@@ -1111,7 +1385,46 @@ function hasModernPostData(responseJson: any, postCode: string): boolean {
   );
 }
 
+type QueryOutcome = {
+  source: "direct" | "legacy";
+  result: any;
+  hasData: boolean;
+};
+
+// After a deadline miss, keep listening for the late upstream result and
+// backfill the post cache so Discord's re-crawl of the same link hits.
+function salvageLateResult(
+  post: string,
+  postID: string,
+  directQueryPromise: Promise<QueryOutcome>,
+  legacyQueryPromise: Promise<QueryOutcome>
+) {
+  const trySalvage = (outcome: QueryOutcome | null) => {
+    if (!outcome?.hasData) return false;
+    const content = buildContentFromResponse(outcome.result, post, postID);
+    if (!content) return false;
+
+    const existing = findPostCache.get(post);
+    if (!existing || existing.value === false) {
+      setPostCache(post, content);
+      writeRuntimeDebug("findPost:salvage:cached", {
+        post,
+        source: outcome.source,
+      });
+    }
+    return true;
+  };
+
+  void (async () => {
+    const direct = await directQueryPromise.catch(() => null);
+    if (trySalvage(direct)) return;
+    const legacy = await legacyQueryPromise.catch(() => null);
+    trySalvage(legacy);
+  })();
+}
+
 async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> | false> {
+  const deadline = new Deadline(TOTAL_BUDGET_MS);
   writeRuntimeDebug("findPost:start", {post});
   // Credit to threads-api for this snippet
   const threadID = normalizeThreadsPostCode(post);
@@ -1134,12 +1447,13 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
   // We'll use whichever returns first with valid data
   writeRuntimeDebug("findPost:parallelQuery:start", {post});
 
-  const directQueryPromise = (async () => {
+  const directQueryPromise: Promise<QueryOutcome> = (async () => {
     const anonymousResult = await fetchThreadsPostPageQueryWithRetries({
       postCode: post,
       postID,
       threadID,
       step: "findPost:directQuery:attempt",
+      deadline,
     });
 
     if (
@@ -1153,13 +1467,14 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
       };
     }
 
-    if (loginCookieHeader) {
+    if (loginCookieHeader && !deadline.expired()) {
       const cookieResult = await fetchThreadsPostPageQueryWithRetries({
         postCode: post,
         postID,
         threadID,
         cookieHeader: loginCookieHeader,
         step: "findPost:directQueryWithCookie:attempt",
+        deadline,
       });
 
       return {
@@ -1183,7 +1498,11 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     return {source: "direct" as const, result: null, hasData: false};
   });
 
-  const legacyQueryPromise = fetchThreadsLegacyPostQuery(postID).then(result => ({
+  const legacyQueryPromise: Promise<QueryOutcome> = fetchThreadsLegacyPostQuery(
+    postID,
+    undefined,
+    deadline
+  ).then(result => ({
     source: 'legacy' as const,
     result,
     hasData: hasPostData(result)
@@ -1192,32 +1511,46 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     return {source: 'legacy' as const, result: null, hasData: false};
   });
 
-  // Race the two queries with a shorter timeout (8s for Discord crawler compatibility)
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error('Parallel query timeout')), THREADS_QUICK_TIMEOUT_MS)
-  );
+  // Track settled results so the deadline path can read them synchronously
+  // instead of awaiting the still-pending promises (the old bug).
+  let directSettled: QueryOutcome | null = null;
+  let legacySettled: QueryOutcome | null = null;
+  directQueryPromise.then(outcome => { directSettled = outcome; });
+  legacyQueryPromise.then(outcome => { legacySettled = outcome; });
+
+  // Direct is strictly preferred (legacy lacks spoiler fragments and
+  // repost/send counts), so return the moment direct succeeds and only
+  // fall back to legacy when direct has definitively failed.
+  const selectionPromise = (async (): Promise<QueryOutcome> => {
+    const direct = await directQueryPromise;
+    if (direct.hasData) return direct;
+    const legacy = await legacyQueryPromise;
+    if (legacy.hasData) return legacy;
+    return direct;
+  })();
+
+  const deadlinePromise = new Promise<never>((_, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Parallel query deadline")),
+      deadline.remaining()
+    );
+    timer.unref();
+    // Don't keep the timer pending after selection settles.
+    selectionPromise.finally(() => clearTimeout(timer)).catch(() => {});
+  });
 
   let fetchThreadsAPIJson: any = null;
   let usedSource = 'none';
 
   try {
-    // Wait for first successful result or timeout
-    const winner = await Promise.race([
-      Promise.all([directQueryPromise, legacyQueryPromise]).then(([direct, legacy]) => {
-        // Prefer direct if it has modern data, otherwise use whichever has data
-        if (direct.hasData) return direct;
-        if (legacy.hasData) return legacy;
-        return direct; // fallback to direct even without data
-      }),
-      timeoutPromise
-    ]);
+    const winner = await Promise.race([selectionPromise, deadlinePromise]);
 
     fetchThreadsAPIJson = winner.result;
     usedSource = winner.source;
     writeRuntimeDebug("findPost:parallelQuery:winner", {post, source: winner.source, hasData: winner.hasData});
 
     // If direct won but doesn't have modern data, try to get login cookie and retry
-    if (winner.source === 'direct' && !winner.hasData) {
+    if (winner.source === 'direct' && !winner.hasData && !deadline.expired()) {
       // Try to use login cookie for authorized request
       try {
         const newToken = await Promise.race([
@@ -1239,6 +1572,7 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
               threadID,
               cookieHeader: cookieHeader,
               step: "findPost:loginCookieFallback:attempt",
+              deadline,
             });
             if (hasPostData(authResult) && hasModernPostData(authResult, post)) {
               fetchThreadsAPIJson = authResult;
@@ -1252,6 +1586,7 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
               threadID,
               authorization: newToken.token,
               step: "findPost:loginFallback:attempt",
+              deadline,
             });
             if (hasPostData(authResult) && hasModernPostData(authResult, post)) {
               fetchThreadsAPIJson = authResult;
@@ -1264,30 +1599,42 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
       }
     }
   } catch (timeoutErr) {
-    // Timeout - use whatever we have from the promises
-    writeRuntimeDebug("findPost:parallelQuery:timeout", {post, timeoutMs: THREADS_QUICK_TIMEOUT_MS});
+    // Deadline hit — read whatever has settled WITHOUT awaiting the
+    // still-pending promises, so the response returns on time.
+    writeRuntimeDebug("findPost:parallelQuery:timeout", {
+      post,
+      timeoutMs: TOTAL_BUDGET_MS,
+      directSettled: Boolean(directSettled),
+      legacySettled: Boolean(legacySettled),
+    });
 
-    // Check if any of them completed despite timeout
-    const [direct, legacy] = await Promise.all([
-      directQueryPromise.catch(() => ({source: 'direct' as const, result: null, hasData: false})),
-      legacyQueryPromise.catch(() => ({source: 'legacy' as const, result: null, hasData: false}))
-    ]);
+    // Explicit annotation: TS narrows the outer lets to null because the
+    // assignments happen inside .then callbacks it can't see.
+    const direct = directSettled as QueryOutcome | null;
+    const legacy = legacySettled as QueryOutcome | null;
 
-    if (direct.hasData) {
+    if (direct?.hasData) {
       fetchThreadsAPIJson = direct.result;
       usedSource = 'direct';
-    } else if (legacy.hasData) {
+    } else if (legacy?.hasData) {
       fetchThreadsAPIJson = legacy.result;
       usedSource = 'legacy';
     } else {
-      fetchThreadsAPIJson = direct.result || legacy.result;
-      usedSource = direct.result ? 'direct' : 'legacy';
+      // No usable data before the deadline — let the still-running queries
+      // finish in the background and backfill the cache for the re-crawl.
+      salvageLateResult(post, postID, directQueryPromise, legacyQueryPromise);
+      fetchThreadsAPIJson = direct?.result || legacy?.result || null;
+      usedSource = direct?.result ? 'direct' : 'legacy';
+      if (!fetchThreadsAPIJson) {
+        return false;
+      }
     }
   }
 
   writeRuntimeDebug("findPost:queryComplete", {post, source: usedSource, hasData: hasPostData(fetchThreadsAPIJson)});
 
   writeRuntimeDebug("findPost:responseValidation:start", {post});
+  if (!fetchThreadsAPIJson) return false;
   if (fetchThreadsAPIJson.errors && fetchThreadsAPIJson.errors.length > 0) {
     if (
       fetchThreadsAPIJson.errors[0].summary == "Not Logged In" ||
@@ -1304,7 +1651,8 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
         } else {
           fetchWithAuth = await fetchThreadsLegacyPostQuery(
             postID,
-            newToken.token ? newToken.token : ""
+            newToken.token ? newToken.token : "",
+            deadline
           );
           fetchThreadsAPIJson = fetchWithAuth;
         }
@@ -1313,13 +1661,13 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
       }
 
       if (
-        (fetchThreadsAPIJson.errors && fetchThreadsAPIJson.errors.length > 0) ||
+        (fetchThreadsAPIJson?.errors && fetchThreadsAPIJson.errors.length > 0) ||
         generalFetchAuthErr
       ) {
         if (
-          fetchThreadsAPIJson.errors[0].summary == "Not Logged In" ||
-          fetchThreadsAPIJson.errors[0].api_error_code == 368 || // you're temporarily blocked error code
-          (fetchThreadsAPIJson.errors[0].message &&
+          fetchThreadsAPIJson?.errors?.[0]?.summary == "Not Logged In" ||
+          fetchThreadsAPIJson?.errors?.[0]?.api_error_code == 368 || // you're temporarily blocked error code
+          (fetchThreadsAPIJson?.errors?.[0]?.message &&
             fetchThreadsAPIJson.errors[0].message.includes("limit exceeded")) ||
           generalFetchAuthErr
         ) {
@@ -1337,9 +1685,19 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     return false;
   }
 
+  return buildContentFromResponse(fetchThreadsAPIJson, post, postID);
+}
+
+function buildContentFromResponse(
+  fetchThreadsAPIJson: any,
+  post: string,
+  postID: string
+): Omit<ContentProps, "userAgent"> | false {
   /* Handle Post Finding */
   writeRuntimeDebug("findPost:postProcessing:start", {post});
-  const thread_items = fetchThreadsAPIJson.data.data.edges[0].node.thread_items;
+  const thread_items =
+    fetchThreadsAPIJson?.data?.data?.edges?.[0]?.node?.thread_items;
+  if (!Array.isArray(thread_items)) return false;
   const postIndex = thread_items.findIndex((item: any) => item.post.code === post);
   writeRuntimeDebug("findPost:postProcessing:index", {
     post,
@@ -1561,6 +1919,21 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
   return returnJson;
 }
 
+function setPostCache(
+  normalizedPost: string,
+  value: Omit<ContentProps, "userAgent"> | false
+) {
+  const ttl =
+    value === false ? POST_CACHE_FAILURE_TTL_MS : POST_CACHE_SUCCESS_TTL_MS;
+  // Delete-then-set refreshes insertion order so eviction drops the oldest.
+  findPostCache.delete(normalizedPost);
+  findPostCache.set(normalizedPost, {
+    expiresAt: Date.now() + ttl,
+    value,
+  });
+  evictOldestEntries(findPostCache, MAX_POST_CACHE_ENTRIES);
+}
+
 async function findPost({
   post,
   userAgent,
@@ -1568,6 +1941,7 @@ async function findPost({
   post: string;
   userAgent: string;
 }) {
+  const startedAt = Date.now();
   const normalizedPost = normalizeThreadsPostCode(post);
   const cachedPost = findPostCache.get(normalizedPost);
   const now = Date.now();
@@ -1592,10 +1966,7 @@ async function findPost({
 
   const request = loadPost(normalizedPost)
     .then(result => {
-      findPostCache.set(normalizedPost, {
-        expiresAt: Date.now() + FIND_POST_CACHE_TTL_MS,
-        value: result,
-      });
+      setPostCache(normalizedPost, result);
       return result;
     })
     .finally(() => {
@@ -1605,6 +1976,10 @@ async function findPost({
   findPostInflight.set(normalizedPost, request);
 
   const result = await request;
+  console.log(
+    `[findPost] ${normalizedPost} fetched in ${Date.now() - startedAt}ms ` +
+      `(${result ? "ok" : "failed"})`
+  );
   if (!result) return false;
 
   return {
@@ -1615,19 +1990,26 @@ async function findPost({
 
 export default findPost;
 
-// 避免循環依賴的輔助函數：從 igLogin 獲取 cookie 但不引入循環依賴
 async function getLoginCookieHeader(): Promise<string | undefined> {
-  // 動態匯入避免頂層依賴，使用 .js 擴展名符合 ESM 規範
-  const {login: getLogin} = await import("./igLogin.js");
+  if (
+    loginCookieCache &&
+    Date.now() - loginCookieCache.fetchedAt < LOGIN_COOKIE_CACHE_MS
+  ) {
+    return loginCookieCache.header;
+  }
+
   try {
-    const result = await getLogin();
+    const result = await login();
+    let header: string | undefined;
     if (result && result.token && result.token.startsWith("COOKIE:")) {
       const cookieJson = result.token.substring(7);
       const cookies = JSON.parse(cookieJson);
-      return Object.entries(cookies)
+      header = Object.entries(cookies)
         .map(([key, value]) => `${key}=${value}`)
         .join("; ");
     }
+    loginCookieCache = {header, fetchedAt: Date.now()};
+    return header;
   } catch {
     // 忽略錯誤
   }

@@ -1,6 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import findPost from "../utils/fetch/findPost";
+import {SHARE_RESOLVE_MS} from "../utils/fetch/http";
 import renderActivity from "../utils/renderActivity";
 import renderPlayer from "../utils/renderPlayer";
 import renderSeo from "../utils/renderSeo";
@@ -18,6 +19,15 @@ const THREADS_HOSTS = new Set([
   "threads.net",
   "www.threads.net",
 ]);
+// Share-code → post-code mappings are stable; cache aggressively.
+const SHARE_CACHE_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
+const SHARE_CACHE_FAILURE_TTL_MS = 60 * 1000;
+const MAX_SHARE_CACHE_ENTRIES = 5000;
+const shareCodeCache = new Map<
+  string,
+  {postCode: string | undefined; expiresAt: number}
+>();
+const shareCodeInflight = new Map<string, Promise<string | undefined>>();
 
 function getActivityStatusId(post: ContentProps) {
   if (post.activityStatusId) return post.activityStatusId;
@@ -97,24 +107,50 @@ async function resolveThreadsShareCode(
 ): Promise<string | undefined> {
   if (!/^[A-Za-z0-9_-]+$/.test(shareCode)) return;
 
-  const response = await fetch(
-    `https://www.threads.com/share/${encodeURIComponent(shareCode)}/`,
-    {
-      method: "HEAD",
-      redirect: "follow",
-      follow: 10,
-      signal: AbortSignal.timeout(10000),
-      headers: userAgent ? {"User-Agent": userAgent} : undefined,
+  const cached = shareCodeCache.get(shareCode);
+  if (cached && cached.expiresAt > Date.now()) return cached.postCode;
+
+  const inflight = shareCodeInflight.get(shareCode);
+  if (inflight) return inflight;
+
+  const resolution = (async () => {
+    const response = await fetch(
+      `https://www.threads.com/share/${encodeURIComponent(shareCode)}/`,
+      {
+        method: "HEAD",
+        redirect: "follow",
+        follow: 10,
+        signal: AbortSignal.timeout(SHARE_RESOLVE_MS),
+        headers: userAgent ? {"User-Agent": userAgent} : undefined,
+      }
+    );
+    const resolvedUrl = new URL(response.url);
+
+    if (!THREADS_HOSTS.has(resolvedUrl.hostname.toLowerCase())) return undefined;
+
+    const pathMatch = resolvedUrl.pathname.match(
+      /^\/(?:@[^/]+\/post|t)\/([A-Za-z0-9_-]+)\/?$/
+    );
+    return pathMatch?.[1];
+  })();
+
+  shareCodeInflight.set(shareCode, resolution);
+  try {
+    const postCode = await resolution;
+    const ttl = postCode
+      ? SHARE_CACHE_SUCCESS_TTL_MS
+      : SHARE_CACHE_FAILURE_TTL_MS;
+    shareCodeCache.delete(shareCode);
+    shareCodeCache.set(shareCode, {postCode, expiresAt: Date.now() + ttl});
+    while (shareCodeCache.size > MAX_SHARE_CACHE_ENTRIES) {
+      const oldestKey = shareCodeCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      shareCodeCache.delete(oldestKey);
     }
-  );
-  const resolvedUrl = new URL(response.url);
-
-  if (!THREADS_HOSTS.has(resolvedUrl.hostname.toLowerCase())) return;
-
-  const pathMatch = resolvedUrl.pathname.match(
-    /^\/(?:@[^/]+\/post|t)\/([A-Za-z0-9_-]+)\/?$/
-  );
-  return pathMatch?.[1];
+    return postCode;
+  } finally {
+    shareCodeInflight.delete(shareCode);
+  }
 }
 
 function wantsActivityJson(req: express.Request) {

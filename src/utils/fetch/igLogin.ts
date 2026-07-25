@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ThreadsAPI } from "threads-api";
+import {debugLog} from "../debugLog";
 
 let tokenStore = {
   token: "",
@@ -11,12 +12,15 @@ let tokenStore = {
 let failedCredentials = new Map<string, number>();
 let runningLogin = false;
 let hasReadTokenFile = false;
+let usersFileCache:
+  | {users: IgUser[]; usersPath: string; readAt: number}
+  | undefined;
 
 const TOKEN_PATH = path.join(process.cwd(), "generated", "token.json");
-const RUNTIME_DEBUG_FILE = "./runtime-debug.log";
 const ROOT_USERS_PATH = path.join(process.cwd(), "config", "users.json");
 const LIB_USERS_PATH = path.join(process.cwd(), "lib", "config", "users.json");
 const FAILED_CREDENTIAL_RETRY_MS = 5 * 60 * 1000;
+const USERS_FILE_CACHE_MS = 60 * 1000;
 const PLACEHOLDER_USERNAMES = new Set(["USERNAME", "YOUR_USERNAME"]);
 const PLACEHOLDER_PASSWORDS = new Set(["PASSWORD", "YOUR_PASSWORD"]);
 const PLACEHOLDER_DEVICE_IDS = new Set(["DEVICE_ID", "YOUR_DEVICE_ID"]);
@@ -102,21 +106,7 @@ function applyStaticCredential(
   return tokenStore;
 }
 
-function writeLoginDebug(
-  step: string,
-  details?: Record<string, string | number | boolean | undefined | null>
-) {
-  try {
-    fs.appendFileSync(
-      RUNTIME_DEBUG_FILE,
-      `${JSON.stringify({
-        time: new Date().toISOString(),
-        step,
-        ...details,
-      })}\n`
-    );
-  } catch {}
-}
+const writeLoginDebug = debugLog;
 
 function hashIdentifier(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -129,6 +119,17 @@ function resolveUsersPath(): string {
 }
 
 function readUsersFile(): {users: IgUser[]; usersPath: string} {
+  // The credentials file rarely changes; avoid sync fs reads on every request.
+  if (usersFileCache && Date.now() - usersFileCache.readAt < USERS_FILE_CACHE_MS) {
+    return usersFileCache;
+  }
+
+  const result = readUsersFileUncached();
+  usersFileCache = {...result, readAt: Date.now()};
+  return result;
+}
+
+function readUsersFileUncached(): {users: IgUser[]; usersPath: string} {
   const usersPath = resolveUsersPath();
 
   try {
@@ -440,6 +441,7 @@ async function refreshToken() {
     timestamp: 0,
     username: "",
   };
+  usersFileCache = undefined;
   writeTokenFile();
   writeLoginDebug("igLogin:refreshRequested");
 
