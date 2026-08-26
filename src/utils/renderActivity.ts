@@ -190,6 +190,25 @@ function getMediaAttachments(content: ContentProps) {
     content.username;
   const videoPreviewUrls = new Set<string>();
 
+  if (content.video.length) {
+    // when having video, discord only shows the first one, and adding more media attachments would cause rendering issues,
+    // so we only need to return the first video in the attachments array
+    const video = content.video[0];
+    return [
+      {
+        id: `${postIdentifier}-video`,
+        type: "video",
+        url: video.url,
+        preview_url: video.previewUrl || null,
+        remote_url: null,
+        preview_remote_url: null,
+        text_url: null,
+        description: null,
+        ...(getVideoMeta(video) ? { meta: getVideoMeta(video) } : {}),
+      },
+    ];
+  }
+
   content.video.forEach((video, index) => {
     const previewUrl = video.previewUrl || null;
     if (previewUrl) videoPreviewUrls.add(previewUrl);

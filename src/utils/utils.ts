@@ -58,7 +58,7 @@ function formatThreadsAuthorName(
   const normalizedUsername = normalizeThreadsUsername(username);
   const trimmedAuthorName = authorName?.trim() || "";
 
-  if (!trimmedAuthorName) return `@${normalizedUsername}`;
+  if (!trimmedAuthorName) return `@${normalizedUsername} (@${normalizedUsername})`;
 
   const displayName = stripThreadsAuthorHandleSuffix(
     trimmedAuthorName,
@@ -66,13 +66,7 @@ function formatThreadsAuthorName(
   );
   const normalizedDisplayName = normalizeThreadsUsername(displayName);
 
-  if (
-    normalizedDisplayName.toLowerCase() === normalizedUsername.toLowerCase()
-  ) {
-    return normalizedUsername;
-  }
-
-  return `${displayName} (@${normalizedUsername})`;
+  return `${normalizedDisplayName} (@${normalizedUsername})`;
 }
 
 function getThreadsUrl(username: string, postCode?: string): string {

@@ -107,11 +107,9 @@ function getAbsoluteUrl(url: string, baseUrl: string) {
   }
 }
 
-function getSeoTitle(content: ContentProps, authorName: string) {
+function getSeoTitle(content: ContentProps) {
   if (!content.title) return "FzThreads";
-  if (!content.authorName) return content.title;
-
-  return content.title.replace(content.authorName, authorName);
+  return content.title;
 }
 
 export default function renderSeo({ type, content }: DataProps) {
@@ -141,7 +139,7 @@ export default function renderSeo({ type, content }: DataProps) {
   const appleTouchIcon = DEFAULT_THREADS_TOUCH_ICON_URL;
   const footerIconMimeType = getIconMimeType(footerIcon);
   const footerFaviconMimeType = getIconMimeType(footerFavicon);
-  const escapedTitle = escape(getSeoTitle(content, rawAuthorName));
+  const escapedTitle = escape(getSeoTitle(content));
   const publishedTime = content.publishedTime
     ? escape(content.publishedTime)
     : "";
