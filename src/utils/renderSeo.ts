@@ -19,7 +19,7 @@ const DEFAULT_THREADS_FAVICON_URL =
   "/favicon.png";
 const DEFAULT_THREADS_TOUCH_ICON_URL =
   "/favicon.png";
-const DEFAULT_THEME_COLOR = "#FFFFFF";
+const DEFAULT_THEME_COLOR = "#101010";
 const MAX_DESCRIPTION_LENGTH = 900;
 const DESCRIPTION_SEPARATOR = "\n\n";
 
