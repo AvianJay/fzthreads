@@ -85,7 +85,8 @@ export function profileUserId(user?: RawProfile): string | undefined {
 }
 
 export function hasCompleteProfile(user?: RawProfile): boolean {
-  // An explicitly null views field is a valid answer; do not retry to fill it.
+  // Field completeness is separate from whether an authenticated viewer can
+  // see a public count that is null in the anonymous response.
   return Boolean(user && ["full_name", "biography", "profile_pic_url", "follower_count", "bio_links", "text_post_app_public_views"]
     .every(key => Object.prototype.hasOwnProperty.call(user, key)));
 }
@@ -95,6 +96,10 @@ function count(value: unknown): number | undefined {
     ? value
     : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
   return Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+}
+
+export function getPublicViewCount(user?: RawProfile): number | undefined {
+  return count(object(user?.text_post_app_public_views)?.text_post_app_public_view_count);
 }
 
 function biography(user: RawProfile): string {
@@ -112,7 +117,7 @@ export function profileContent(user: RawProfile, userAgent: string): ContentProp
   const displayName = typeof user.full_name === "string" ? user.full_name.trim() : "";
   const authorName = formatThreadsAuthorName(displayName, username);
   const followerCount = count(user.follower_count);
-  const publicViewCount = count(object(user.text_post_app_public_views)?.text_post_app_public_view_count);
+  const publicViewCount = getPublicViewCount(user);
   const versions = Array.isArray(user.hd_profile_pic_versions)
     ? user.hd_profile_pic_versions.map(object).filter(version => Boolean(version)) : [];
   versions.sort((a, b) => (count(b?.width) || 0) - (count(a?.width) || 0));

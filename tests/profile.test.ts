@@ -50,6 +50,8 @@ function descriptor(name = direct) {
   return jsonScript({expectedPreloaders: [{
     queryName: name, queryID: "123456789", variables: {
       ...(name === direct ? {userID: user.pk} : {username}),
+      __relay_internal__pv__BarcelonaIsLoggedInrelayprovider: false,
+      ...(name === direct ? {__relay_internal__pv__BarcelonaIsLoggedOutrelayprovider: true} : {}),
       testProvider: true,
     },
   }]});
@@ -184,14 +186,88 @@ function finder(steps: Step[], token?: string, budget = 1500) {
 const response = (value: unknown) => new Response(JSON.stringify(value));
 const queryBody = (call: {init?: RequestInit}) => new URLSearchParams(String(call.init?.body));
 
-test("complete preload requires one request and no authentication, even with null views", async () => {
-  const f = finder([new Response(preloaded(user))]);
+test("null views without a configured credential return the anonymous profile without repeating queries", async () => {
+  const f = finder([new Response(context + preloaded(user))]);
   const content = await f.run();
   assert.ok(content);
   assert.equal(content.description, user.biography);
   assert.equal(content.profile?.publicViewCount, undefined);
   assert.equal(f.calls.length, 1);
-  assert.equal(f.credentialReads(), 0);
+  assert.equal(f.credentialReads(), 1);
+});
+
+test("available public views, including zero, need no credential lookup or extra request", async () => {
+  for (const count of [0, 156102]) {
+    const f = finder([new Response(context + preloaded({...user,
+      text_post_app_public_views: {text_post_app_public_view_count: count},
+    }))]);
+    const content = await f.run();
+    assert.ok(content);
+    assert.equal(content.profile?.publicViewCount, count);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.credentialReads(), 0);
+  }
+});
+
+const testCookie = 'COOKIE:{"sessionid":"fake-session","csrftoken":"fake-csrf","ds_user_id":"12"}';
+const browserUser = {...user,
+  text_post_app_public_views: {text_post_app_public_view_count: "156102"},
+};
+
+test("anonymous preloaded null views are enriched once with configured credentials and logged-in variables", async () => {
+  const f = finder([
+    new Response(context + descriptor() + preloaded(user)),
+    response({data: {user: browserUser}}),
+  ], testCookie);
+  const content = await f.run();
+  assert.ok(content);
+  assert.equal(content.profile?.publicViewCount, 156102);
+  assert.ok(textOf(buildProfileComponents(content)!).includes("👀 156.1K"));
+  assert.equal(f.credentialReads(), 1);
+  assert.equal(f.calls.length, 2);
+  const headers = new Headers(f.calls[1].init?.headers);
+  assert.match(headers.get("Cookie")!, /sessionid=fake-session/);
+  assert.equal(headers.get("X-Logged-Out-Threads-Migrated-Request"), null);
+  assert.equal(headers.get("Authorization"), null);
+  const body = queryBody(f.calls[1]);
+  assert.equal(body.get("doc_id"), "123456789");
+  const variables = JSON.parse(body.get("variables")!);
+  assert.equal(variables.__relay_internal__pv__BarcelonaIsLoggedInrelayprovider, true);
+  assert.equal(variables.__relay_internal__pv__BarcelonaIsLoggedOutrelayprovider, false);
+  assert.equal(variables.testProvider, true);
+});
+
+test("successful anonymous GraphQL with null views also triggers authenticated enrichment", async () => {
+  const f = finder([
+    new Response(context + descriptor()), response({data: {user}}),
+    response({data: {user: browserUser}}),
+  ], "Bearer fake-test-token");
+  const content = await f.run();
+  assert.ok(content);
+  assert.equal(content.profile?.publicViewCount, 156102);
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.credentialReads(), 1);
+  const headers = new Headers(f.calls[2].init?.headers);
+  assert.equal(headers.get("Authorization"), "Bearer fake-test-token");
+  assert.equal(headers.get("X-Logged-Out-Threads-Migrated-Request"), null);
+  const variables = JSON.parse(queryBody(f.calls[2]).get("variables")!);
+  assert.equal(variables.__relay_internal__pv__BarcelonaIsLoggedInrelayprovider, true);
+  assert.equal(variables.__relay_internal__pv__BarcelonaIsLoggedOutrelayprovider, false);
+});
+
+test("authenticated null/error responses keep the base profile and do not retry", async () => {
+  for (const upstream of [response({data: {user}}), new Response("denied", {status: 403}),
+    new Response("invalid JSON"), response({errors: [{summary: "Not Logged In"}]})]) {
+    const f = finder([new Response(context + preloaded(user)), upstream], testCookie);
+    const content = await f.run();
+    assert.ok(content);
+    assert.equal(content.profile?.publicViewCount, undefined);
+    assert.equal(content.description, user.biography);
+    assert.equal(content.profile?.followerCount, 35);
+    assert.equal(content.profile?.links?.length, 3);
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.credentialReads(), 1);
+  }
 });
 
 test("DirectQuery honors page query ID and variables, and matches the returned username", async () => {

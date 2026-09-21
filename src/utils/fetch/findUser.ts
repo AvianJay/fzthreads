@@ -2,7 +2,9 @@ import fetch from "node-fetch";
 import {login} from "./igLogin";
 import {Deadline, FINDUSER_FETCH_MS, TOTAL_BUDGET_MS} from "./http";
 import {getThreadsUrl, normalizeThreadsUsername} from "../utils";
+import {debugLog} from "../debugLog";
 import {
+  getPublicViewCount,
   hasCompleteProfile,
   object,
   profileContent,
@@ -128,7 +130,13 @@ export function createUserFinder(dependencies: Dependencies) {
       }
       const page = readProfilePage(html, username);
       bestUser = page.user;
-      if (hasCompleteProfile(bestUser) || deadline.expired()) return;
+      const needsPublicViews = () => getPublicViewCount(bestUser) === undefined;
+      debugLog("findUser:page", {
+        username,
+        hasProfile: Boolean(bestUser),
+        hasPublicViews: !needsPublicViews(),
+      });
+      if ((hasCompleteProfile(bestUser) && !needsPublicViews()) || deadline.expired()) return;
       const lsd = html.match(/"LSD",\s*\[\],\s*\{"token":"([^"]+)"\}/)?.[1];
       if (!lsd) return;
 
@@ -143,6 +151,12 @@ export function createUserFinder(dependencies: Dependencies) {
           ...(direct ? {canSeeFeedsTab: true, showLinkedIGStats: false} : {}),
           ...descriptor?.variables,
           ...(direct ? {userID} : {username}),
+          // A descriptor from the anonymous HTML must not override the
+          // authenticated request's viewer state.
+          ...(Object.keys(credential).length ? {
+            __relay_internal__pv__BarcelonaIsLoggedInrelayprovider: true,
+            ...(direct ? {__relay_internal__pv__BarcelonaIsLoggedOutrelayprovider: false} : {}),
+          } : {}),
         };
         const cookies = mergeCookies(pageCookies, credential.Cookie);
         const csrf = cookies.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1];
@@ -180,7 +194,7 @@ export function createUserFinder(dependencies: Dependencies) {
               "X-Ig-App-Id": "238260118697367",
               "X-Fb-Friendly-Name": name,
               "X-Root-Field-Name": direct ? "xdt_text_app_user" : "xdt_text_app_user_by_username",
-              ...(actor === "0" && !credential.Authorization ? {"X-Logged-Out-Threads-Migrated-Request": "true"} : {}),
+              ...(!Object.keys(credential).length ? {"X-Logged-Out-Threads-Migrated-Request": "true"} : {}),
               ...(csrf ? {"X-Csrftoken": csrf} : {}),
               ...credential,
               ...(cookies ? {Cookie: cookies} : {}),
@@ -189,10 +203,21 @@ export function createUserFinder(dependencies: Dependencies) {
           });
           absorbCookies(response);
           const text = await response.text();
+          debugLog("findUser:query", {
+            username,
+            query: name,
+            authenticated: Boolean(Object.keys(credential).length),
+            status: response.status,
+          });
           if (!response.ok) return;
           const json: unknown = JSON.parse(text.replace(/^for\s*\(;;\);\s*/, ""));
           const user = readProfileResponse(json, username);
           if (user) bestUser = {...bestUser, ...user};
+          debugLog("findUser:queryResult", {
+            username,
+            hasProfile: Boolean(user),
+            hasPublicViews: getPublicViewCount(user) !== undefined,
+          });
           return user;
         } catch {
           // Do not log request details: headers and upstream errors can contain credentials.
@@ -200,14 +225,25 @@ export function createUserFinder(dependencies: Dependencies) {
         }
       };
 
-      const direct = Boolean(profileUserId(bestUser) || page.queries[DIRECT_QUERY]?.variables.userID);
-      let queriedUser = await query(direct);
-      if (!queriedUser && !deadline.expired() && !controller.signal.aborted) {
+      const canQueryDirect = () => Boolean(profileUserId(bestUser) || page.queries[DIRECT_QUERY]?.variables.userID);
+      let usedDirectQuery = canQueryDirect();
+      // A complete anonymous profile with null views needs authentication,
+      // not another copy of the same anonymous result.
+      let queriedUser = hasCompleteProfile(bestUser) ? bestUser : await query(usedDirectQuery);
+      if ((!queriedUser || needsPublicViews()) && !deadline.expired() && !controller.signal.aborted) {
         credential = profileCredentialHeaders(await dependencies.getCredential());
-        if (Object.keys(credential).length) queriedUser = await query(direct);
+        debugLog("findUser:credential", {
+          username,
+          kind: credential.Cookie ? "cookie" : credential.Authorization ? "bearer" : "none",
+        });
+        if (Object.keys(credential).length) {
+          usedDirectQuery = canQueryDirect();
+          queriedUser = await query(usedDirectQuery);
+        }
       }
       // The username query omits public views; resolve its ID, then enrich once.
-      if (!direct && queriedUser && !hasCompleteProfile(bestUser) && profileUserId(bestUser)) {
+      // An authenticated DirectQuery returning null is final: never loop.
+      if (!usedDirectQuery && queriedUser && !hasCompleteProfile(bestUser) && profileUserId(bestUser)) {
         await query(true);
       }
     };
