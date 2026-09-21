@@ -151,6 +151,9 @@ export function createUserFinder(dependencies: Dependencies) {
           ...(direct ? {canSeeFeedsTab: true, showLinkedIGStats: false} : {}),
           ...descriptor?.variables,
           ...(direct ? {userID} : {username}),
+          // Request the public federation flag even when the page descriptor
+          // was generated for a viewer without the fediverse UI enabled.
+          __relay_internal__pv__BarcelonaShouldShowFediverseM1Featuresrelayprovider: true,
           // A descriptor from the anonymous HTML must not override the
           // authenticated request's viewer state.
           ...(Object.keys(credential).length ? {

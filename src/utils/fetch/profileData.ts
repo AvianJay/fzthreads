@@ -87,8 +87,16 @@ export function profileUserId(user?: RawProfile): string | undefined {
 export function hasCompleteProfile(user?: RawProfile): boolean {
   // Field completeness is separate from whether an authenticated viewer can
   // see a public count that is null in the anonymous response.
-  return Boolean(user && ["full_name", "biography", "profile_pic_url", "follower_count", "bio_links", "text_post_app_public_views"]
+  return Boolean(user && [
+    "full_name", "biography", "profile_pic_url", "follower_count", "bio_links",
+    "text_post_app_public_views", "show_text_post_app_badge", "is_verified",
+    "text_post_app_is_private", "text_post_app_has_fediverse_enabled",
+  ]
     .every(key => Object.prototype.hasOwnProperty.call(user, key)));
+}
+
+function boolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function count(value: unknown): number | undefined {
@@ -118,6 +126,8 @@ export function profileContent(user: RawProfile, userAgent: string): ContentProp
   const authorName = formatThreadsAuthorName(displayName, username);
   const followerCount = count(user.follower_count);
   const publicViewCount = getPublicViewCount(user);
+  const instagramUrl = user.show_text_post_app_badge === true && /^[a-z0-9._]+$/i.test(username)
+    ? `https://www.instagram.com/${username}/` : undefined;
   const versions = Array.isArray(user.hd_profile_pic_versions)
     ? user.hd_profile_pic_versions.map(object).filter(version => Boolean(version)) : [];
   versions.sort((a, b) => (count(b?.width) || 0) - (count(a?.width) || 0));
@@ -144,6 +154,12 @@ export function profileContent(user: RawProfile, userAgent: string): ContentProp
     footerIcon: "/favicon.png",
     video: [],
     userAgent,
-    profile: {displayName: displayName || username, followerCount, publicViewCount, links},
+    profile: {
+      displayName: displayName || username, followerCount, publicViewCount, links,
+      instagramUrl,
+      isVerified: boolean(user.is_verified),
+      isPrivate: boolean(user.text_post_app_is_private),
+      isFederated: boolean(user.text_post_app_has_fediverse_enabled),
+    },
   };
 }

@@ -20,6 +20,10 @@ const user: RawProfile = {
   username, pk: "78570161804", full_name: "尼摳",
   biography: "尼摳會來摳你\n真的還是假的？\nmain: @av1anjay",
   follower_count: 35,
+  show_text_post_app_badge: true,
+  is_verified: false,
+  text_post_app_is_private: false,
+  text_post_app_has_fediverse_enabled: null,
   text_post_app_public_views: null,
   profile_pic_url: "https://example.com/avatar-150.jpg",
   hd_profile_pic_versions: [
@@ -51,6 +55,7 @@ function descriptor(name = direct) {
     queryName: name, queryID: "123456789", variables: {
       ...(name === direct ? {userID: user.pk} : {username}),
       __relay_internal__pv__BarcelonaIsLoggedInrelayprovider: false,
+      __relay_internal__pv__BarcelonaShouldShowFediverseM1Featuresrelayprovider: false,
       ...(name === direct ? {__relay_internal__pv__BarcelonaIsLoggedOutrelayprovider: true} : {}),
       testProvider: true,
     },
@@ -77,7 +82,7 @@ test("profile layout matches the reference, with HD avatar, ordered buttons and 
   assert.equal(section.type, 9);
   if (section.type !== 9) return;
   assert.equal(section.components[0].content, "### [尼摳](https://www.threads.com/@nicko948787)\nnicko948787");
-  assert.equal(section.components[1].content, `${user.biography}\n\n**👤 35 🔗 3**`);
+  assert.equal(section.components[1].content, "尼摳會來摳你\n真的還是假的？\nmain: [@av1anjay](https://www.threads.com/@av1anjay)\n\n**👤 35 🔗 3**");
   assert.equal(section.accessory.media.url, "https://example.com/avatar-640.jpg");
   const row = value.component.components[2];
   assert.equal(row.type, 1);
@@ -86,6 +91,7 @@ test("profile layout matches the reference, with HD avatar, ordered buttons and 
     {type: 2, style: 5, url: "https://dc.avianjay.sbs/", label: "角蛙社群"},
     {type: 2, style: 5, url: "https://yee.avianjay.sbs/", label: "非常牛逼的機器人（應該吧）"},
     {type: 2, style: 5, url: "https://discord.gg/earthonlinetw", label: "連結"},
+    {type: 2, style: 5, url: "https://www.instagram.com/nicko948787/", label: "Instagram"},
   ]);
   assert.deepEqual(value.component.components.at(-1), {type: 10, content: "-# FzThreads"});
 });
@@ -105,7 +111,7 @@ test("unknown counts are omitted; zero is preserved; views use K/M with one deci
 
 test("missing avatar uses text components; missing biography/links leave no empty sections", () => {
   const value = payload({...user, biography: "", bio_links: [],
-    profile_pic_url: "javascript:bad", hd_profile_pic_versions: []});
+    profile_pic_url: "javascript:bad", hd_profile_pic_versions: [], show_text_post_app_badge: false});
   assert.deepEqual(value.component.components.map(c => c.type), [10, 10, 14, 10]);
   assert.doesNotMatch(textOf(value), /\n\n/);
   const minimal = payload({username});
@@ -235,6 +241,80 @@ test("anonymous preloaded null views are enriched once with configured credentia
   assert.equal(variables.__relay_internal__pv__BarcelonaIsLoggedInrelayprovider, true);
   assert.equal(variables.__relay_internal__pv__BarcelonaIsLoggedOutrelayprovider, false);
   assert.equal(variables.testProvider, true);
+  assert.equal(variables.__relay_internal__pv__BarcelonaShouldShowFediverseM1Featuresrelayprovider, true);
+});
+
+test("Instagram follows the profile badge setting and does not increase the bio link count", () => {
+  for (const flag of [false, undefined, null, "true", 1]) {
+    const content = profileContent({...user, show_text_post_app_badge: flag}, "Discordbot/2.0");
+    assert.equal(content.profile?.instagramUrl, undefined);
+    const buttons = buildProfileComponents(content)!.component.components
+      .flatMap(c => c.type === 1 ? c.components : []);
+    assert.equal(buttons.length, 3);
+    assert.ok(buttons.every(b => b.label !== "Instagram"));
+  }
+  const value = payload({...user, bio_links: []});
+  const buttons = value.component.components.flatMap(c => c.type === 1 ? c.components : []);
+  assert.deepEqual(buttons, [{type: 2, style: 5, url: "https://www.instagram.com/nicko948787/", label: "Instagram"}]);
+  assert.ok(textOf(value).includes("🔗 0"));
+});
+
+test("five bio links plus Instagram use two rows without dropping a bio link", () => {
+  const value = payload({...user, bio_links: Array.from({length: 5}, (_, i) => ({
+    title: `Link ${i}`, url: `https://example.com/${i}`,
+  }))});
+  const rows = value.component.components.filter(c => c.type === 1);
+  assert.deepEqual(rows.map(row => row.components.length), [5, 1]);
+  assert.equal(rows[1].components[0].label, "Instagram");
+  assert.equal(rows[0].components[4].url, "https://example.com/4");
+  assert.ok(textOf(value).includes("🔗 5"));
+});
+
+test("only explicit public flags produce status badges", () => {
+  const value = payload({...user, is_verified: true, text_post_app_is_private: true,
+    text_post_app_has_fediverse_enabled: true});
+  const text = textOf(value);
+  assert.ok(text.includes("-# ✅ 已認證 · 🔒 私人帳號 · 🌐 聯邦宇宙"));
+  for (const flag of [false, null, undefined, "true", "false", 1]) {
+    assert.doesNotMatch(textOf(payload({...user, is_verified: flag,
+      text_post_app_is_private: flag, text_post_app_has_fediverse_enabled: flag})), /已認證|私人帳號|聯邦宇宙/);
+  }
+  // Instagram privacy must not be mistaken for the Threads privacy setting.
+  assert.doesNotMatch(textOf(payload({...user, is_private: true})), /私人帳號/);
+});
+
+test("biography mentions are linked safely without changing plain OG text or view labels", () => {
+  const biography = "找@av1anjay\n(@hello.world) @test_user.\nmail: me@example.com\nhttps://example.com/@path www.example.com/@other @name@server.tld\n[spoof](https://bad.test) *text*";
+  const content = profileContent({...user, biography,
+    text_post_app_public_views: {text_post_app_public_view_count: 156201}}, "Discordbot/2.0");
+  const text = textOf(buildProfileComponents(content)!);
+  assert.ok(text.includes("找[@av1anjay](https://www.threads.com/@av1anjay)"));
+  assert.ok(text.includes("[@hello\\.world](https://www.threads.com/@hello.world)"));
+  assert.ok(text.includes("[@test\\_user](https://www.threads.com/@test_user)\\."));
+  for (const handle of ["example.com", "path", "other", "name", "server.tld"]) {
+    assert.ok(!text.includes(`https://www.threads.com/@${handle}`));
+  }
+  assert.ok(text.includes("\\[spoof\\]\\(https://bad\\.test\\) \\*text\\*"));
+  assert.ok(text.includes("👀 156.2K"));
+  assert.doesNotMatch(text, /近\s*30|30\s*天/);
+  assert.equal(content.description, biography);
+  const html = renderSeo({type: "user", content});
+  const og = html.match(/<meta property="og:description" content="([^"]*)"/s)![1];
+  assert.ok(og.includes("找@av1anjay"));
+  assert.ok(!og.includes("https://www.threads.com/@av1anjay"));
+});
+
+test("truncating a biography never cuts through a generated mention link", () => {
+  const content = profileContent({...user, biography: `${"x".repeat(2975)} @av1anjay ${"more ".repeat(10)}`}, "Discordbot/2.0");
+  const section = buildProfileComponents(content)!.component.components[0];
+  assert.equal(section.type, 9);
+  if (section.type !== 9) return;
+  const biography = section.components[1].content.split("\n\n")[0];
+  assert.ok(biography.length <= 3000);
+  assert.ok(biography.endsWith("…"));
+  assert.ok(biography.includes("@av1anjay"));
+  assert.ok(!biography.includes("[@av1anjay]"));
+  assert.doesNotMatch(biography, /https:\/\/www\.threads/);
 });
 
 test("successful anonymous GraphQL with null views also triggers authenticated enrichment", async () => {

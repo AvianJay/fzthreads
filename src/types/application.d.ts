@@ -19,6 +19,10 @@ interface ProfileProps {
   displayName: string;
   followerCount?: number;
   publicViewCount?: number;
+  instagramUrl?: string;
+  isVerified?: boolean;
+  isPrivate?: boolean;
+  isFederated?: boolean;
   // Undefined means unavailable; an empty array means no profile links.
   links?: ProfileLinkProps[];
 }

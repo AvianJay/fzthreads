@@ -1,6 +1,7 @@
 import {getThreadsUrl, normalizeThreadsUsername, publicHttpUrl} from "./utils";
 
 type TextDisplay = {type: 10; content: string};
+type LinkButton = {type: 2; style: 5; url: string; label: string};
 type ProfileComponent =
   | TextDisplay
   | {
@@ -11,7 +12,7 @@ type ProfileComponent =
   | {type: 14; divider: true; spacing: 1}
   | {
       type: 1;
-      components: {type: 2; style: 5; url: string; label: string}[];
+      components: LinkButton[];
     };
 
 function truncate(text: string, maxLength: number): string {
@@ -22,6 +23,44 @@ function truncate(text: string, maxLength: number): string {
 
 function escapeMarkdown(text: string): string {
   return text.replace(/([\\`*_{}\[\]()<>#+\-.!|~])/g, "\\$1");
+}
+
+function formatBiography(text: string): string {
+  const parts: {plain: string; markdown: string}[] = [];
+  const literal = (plain: string) => parts.push({plain, markdown: escapeMarkdown(plain)});
+  // Consume URLs as a whole. An @ inside a URL, email, or fediverse address
+  // must not turn into a link to a different Threads account.
+  const tokens = /(?:https?:\/\/|www\.)[^\s<>]+|(?<![a-z0-9_@.+%/\\-])@([a-z0-9_.]+)(?![a-z0-9_@])/gi;
+  let offset = 0;
+  for (const match of text.matchAll(tokens)) {
+    literal(text.slice(offset, match.index));
+    const handle = match[1]?.replace(/\.+$/, "");
+    if (handle && handle.length <= 30) {
+      const plain = `@${handle}`;
+      parts.push({plain, markdown: `[${escapeMarkdown(plain)}](${getThreadsUrl(handle)})`});
+      literal(match[0].slice(plain.length));
+    } else {
+      literal(match[0]);
+    }
+    offset = match.index! + match[0].length;
+  }
+  literal(text.slice(offset));
+
+  const full = parts.map(part => part.markdown).join("");
+  if (full.length <= 3000) return full;
+  let result = "";
+  for (const part of parts) {
+    const remaining = 2999 - result.length;
+    if (part.markdown.length <= remaining) {
+      result += part.markdown;
+    } else {
+      // Keep generated links intact. If a link cannot fit, show its label as
+      // plain text rather than leaving half a Markdown link in the preview.
+      const plain = escapeMarkdown(part.plain);
+      return result + (plain.length <= remaining ? `${plain}…` : truncate(plain, remaining + 1));
+    }
+  }
+  return `${result}…`;
 }
 
 function compactViews(count: number): string {
@@ -46,12 +85,17 @@ export function buildProfileComponents(content: ContentProps) {
     .filter((link): link is {url: string; title: string} => Boolean(link.url));
   if (links) stats.push(`🔗 ${links.length}`);
 
+  const badges: string[] = [];
+  if (profile.isVerified === true) badges.push("✅");
+  if (profile.isPrivate === true) badges.push("🔒");
+  if (profile.isFederated === true) badges.push("🌐");
+
   const heading: TextDisplay = {
     type: 10,
-    content: `### [${truncate(escapeMarkdown(profile.displayName || username), 256)}](${getThreadsUrl(username)})\n${escapeMarkdown(username)}`,
+    content: `### [${truncate(escapeMarkdown(profile.displayName || username), 256)}](${getThreadsUrl(username)})\n${escapeMarkdown(username)}${badges.length ? `\n-# ${badges.join(" · ")}` : ""}`,
   };
   const body = [
-    truncate(escapeMarkdown(content.description || ""), 3000),
+    formatBiography(content.description || ""),
     stats.length ? `**${stats.join(" ")}**` : "",
   ].filter(Boolean).join("\n\n");
   const text: TextDisplay[] = [heading];
@@ -61,15 +105,19 @@ export function buildProfileComponents(content: ContentProps) {
     ? [{type: 9, components: text, accessory: {type: 11, media: {url: avatar}}}]
     : [...text];
   const separator = {type: 14, divider: true, spacing: 1} as const;
-  if (links?.length) {
-    components.push(separator, {
+  const buttons: LinkButton[] = (links || []).slice(0, 5).map(link => ({
+    type: 2,
+    style: 5,
+    url: link.url,
+    label: truncate(link.title.trim() || "連結", 80),
+  }));
+  const instagramUrl = publicHttpUrl(profile.instagramUrl, 512);
+  if (instagramUrl) buttons.push({type: 2, style: 5, url: instagramUrl, label: "Instagram"});
+  if (buttons.length) {
+    components.push(separator);
+    for (let offset = 0; offset < buttons.length; offset += 5) components.push({
       type: 1,
-      components: links.slice(0, 5).map(link => ({
-        type: 2,
-        style: 5,
-        url: link.url,
-        label: truncate(link.title.trim() || "連結", 80),
-      })),
+      components: buttons.slice(offset, offset + 5),
     });
   }
   components.push(separator, {type: 10, content: "-# FzThreads"});
