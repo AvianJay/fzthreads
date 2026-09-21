@@ -18,6 +18,18 @@ const THREADS_POST_ALPHABET =
 const THREADS_ACCOUNT_DOMAIN_SUFFIX =
   /@(?:www\.)?threads\.(?:com|net)$/i;
 
+function publicHttpUrl(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string" || value.length > maxLength) return;
+  try {
+    const url = new URL(value);
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password) return;
+    const result = url.href;
+    return result.length <= maxLength ? result : undefined;
+  } catch {
+    return;
+  }
+}
+
 function formatNumber(num: number): string {
   return num.toLocaleString();
 }
@@ -108,6 +120,7 @@ function decodeThreadsPostId(postId: string): string | undefined {
 }
 
 export {
+  publicHttpUrl,
   HttpError,
   GlobalVars,
   formatNumber,

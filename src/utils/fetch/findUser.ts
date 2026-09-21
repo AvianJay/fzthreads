@@ -1,151 +1,236 @@
 import fetch from "node-fetch";
-import { login, refreshToken } from "./igLogin";
-import {FINDUSER_FETCH_MS} from "./http";
+import {login} from "./igLogin";
+import {Deadline, FINDUSER_FETCH_MS, TOTAL_BUDGET_MS} from "./http";
+import {getThreadsUrl, normalizeThreadsUsername} from "../utils";
 import {
-  formatNumber,
-  formatThreadsAuthorName,
-  normalizeThreadsUsername,
-} from "../utils";
+  hasCompleteProfile,
+  object,
+  profileContent,
+  profileUserId,
+  ProfileQuery,
+  RawProfile,
+  readProfilePage,
+  readProfileResponse,
+} from "./profileData";
 
-const THREADS_ICON_URL = "/favicon.png";
+const ORIGIN = "https://www.threads.com";
+const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+const DIRECT_QUERY = "BarcelonaProfilePageDirectQuery";
+const FALLBACK_QUERY = "BarcelonaProfilePageFallbackQuery";
+// Current web query IDs, used when the HTML omits its Relay descriptors.
+const QUERY_IDS = {[DIRECT_QUERY]: "26774588645572510", [FALLBACK_QUERY]: "28575850328713053"};
+const BASE_PROVIDERS = {
+  BarcelonaIsLoggedIn: false,
+  BarcelonaMessagesHasLiveChatMessaging: false,
+  BarcelonaHasEventBadge: false,
+  BarcelonaShouldShowFediverseM1Features: false,
+};
 
-async function findUser({
-  username,
-  userAgent,
-}: {
-  username: string;
-  userAgent: string;
-}) {
-  const normalizedUsername = normalizeThreadsUsername(username);
-  let postResText: any = await fetch(`https://www.threads.com/@${normalizedUsername}`, {
-    signal: AbortSignal.timeout(FINDUSER_FETCH_MS),
-    headers: {
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "Accept-Encoding": "gzip, deflate, br",
-      "Accept-Language": "en-US,en;q=0.5",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      Host: "www.threads.com",
-      Pragma: "no-cache",
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "none",
-      "Sec-Fetch-User": "?1",
-      "Upgrade-Insecure-Requests": "1",
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/114.0",
-    },
-  });
-  postResText = await postResText.text();
-  // Credit to threads-api for this snippet
-  postResText = postResText.replace(/\s/g, "");
-  postResText = postResText.replace(/\n/g, "");
-  const id: string | undefined = postResText.match(/"user_id":"(\d+)"/)?.[1];
-  const lsdToken: string | undefined = postResText.match(
-    /"LSD",\[\],{"token":"(\w+)"},\d+\]/
-  )?.[1];
-
-  let details = {
-    variables: `{"userID":"${id}","__relay_internal__pv__BarcelonaIsSableEnabledrelayprovider":false,"__relay_internal__pv__BarcelonaIsSuggestedUsersOnProfileEnabledrelayprovider":false,"__relay_internal__pv__BarcelonaShouldShowFediverseM075Featuresrelayprovider":false}`,
-    doc_id: "6924492170994454",
-    lsd: lsdToken || "GwDPK2EGiKW0LKebIEqqbF",
-  };
-  let formBody: string[] = [];
-  for (let property in details) {
-    let encodedKey = encodeURIComponent(property);
-    // @ts-ignore
-    let encodedValue = encodeURIComponent(details[property]);
-    formBody.push(encodedKey + "=" + encodedValue);
-  }
-  let finalFormBody = formBody.join("&");
-  let fetchThreadsAPI = await fetch(`https://www.threads.com/api/graphql`, {
-    method: "POST",
-    signal: AbortSignal.timeout(FINDUSER_FETCH_MS),
-    headers: {
-      "Sec-Fetch-Mode": "cors",
-      "Sec-Fetch-Site": " same-origin",
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-      "X-Fb-Lsd": lsdToken || "GwDPK2EGiKW0LKebIEqqbF",
-      "X-Ig-App-Id": "238260118697367",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: finalFormBody,
-  });
-  let fetchThreadsAPIJson: any = await fetchThreadsAPI.json();
-  if (fetchThreadsAPIJson.errors && fetchThreadsAPIJson.errors.length > 0) {
-    if (fetchThreadsAPIJson.errors[0].summary == "Not Logged In") {
-      let newToken = await login();
-      if (newToken == false) {
-        return false;
-      } else {
-        let fetchWithAuth = await fetch(`https://www.threads.com/api/graphql`, {
-          method: "POST",
-          signal: AbortSignal.timeout(FINDUSER_FETCH_MS),
-          headers: {
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": " same-origin",
-            "User-Agent":
-              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-            "X-Fb-Lsd": lsdToken || "GwDPK2EGiKW0LKebIEqqbF",
-            "X-Ig-App-Id": "238260118697367",
-            "Content-Type": "application/x-www-form-urlencoded",
-            Authorization: newToken.token ? newToken.token : "",
-          },
-          body: finalFormBody,
-        });
-        fetchThreadsAPIJson = await fetchWithAuth.json();
-
-        if (
-          fetchThreadsAPIJson.errors &&
-          fetchThreadsAPIJson.errors.length > 0
-        ) {
-          if (fetchThreadsAPIJson.errors[0].summary == "Not Logged In") {
-            let tokenRefresh = await refreshToken();
-            if (tokenRefresh == false) return false;
-          }
-        }
-      }
-    } else {
-      return false;
-    }
-  } else if (!fetchThreadsAPIJson.data) {
-    return false;
-  }
-
-  let userObj = fetchThreadsAPIJson.data.user;
-
-  /* Setup oEmbed */
-  let oembedStat = `👤 ${formatNumber(userObj.follower_count)} 個追蹤者`;
-  // ${
-  //   userObj.follower_count > 1 ? "s" : ""
-  // }
-  const profileUsername = normalizeThreadsUsername(
-    userObj.username || normalizedUsername
-  );
-  const authorName = formatThreadsAuthorName(
-    userObj.full_name,
-    profileUsername
-  );
-
-  let returnJson = {
-    description: userObj.biography,
-    title: `Threads 上的 ${authorName}`,
-    images: [{ url: userObj.profile_pic_url }],
-    username: profileUsername,
-    imageType: "single",
-    oembedStat,
-    authorName,
-    authorUrl: `https://www.threads.com/@${profileUsername}`,
-    authorIcon: userObj.profile_pic_url,
-    footerName: "FzThreads",
-    footerIcon: THREADS_ICON_URL,
-    video: [],
-    userAgent,
-  };
-
-  return returnJson;
+function defaultVariables(direct: boolean): Record<string, unknown> {
+  const providers = direct ? {
+    ...BASE_PROVIDERS,
+    BarcelonaHasMessaging: false,
+    BarcelonaIsLoggedOut: true,
+    BarcelonaHasInsightsProfileM2: false,
+    BarcelonaIsInternalUser: false,
+    BarcelonaHasCommunitiesOrLoggedOut: true,
+    BarcelonaHasWebFavicons: false,
+    BarcelonaHasCommunityTopContributors: false,
+    BarcelonaHasPodcastV2Production: false,
+  } : BASE_PROVIDERS;
+  return Object.fromEntries(Object.entries(providers)
+    .map(([key, value]) => [`__relay_internal__pv__${key}relayprovider`, value]));
 }
 
-export default findUser;
+export function profileCredentialHeaders(token?: string): Record<string, string> {
+  if (!token) return {};
+  if (token.startsWith("COOKIE:")) {
+    try {
+      const cookies = object(JSON.parse(token.slice(7)));
+      if (!cookies) return {};
+      const header = Object.entries(cookies)
+        .filter(([key, value]) => /^[\w-]+$/.test(key) && typeof value === "string" && !/[;\r\n]/.test(value))
+        .map(([key, value]) => `${key}=${value}`).join("; ");
+      return header ? {Cookie: header} : {};
+    } catch {
+      return {};
+    }
+  }
+  return token.startsWith("Bearer ") && !/[\r\n]/.test(token) ? {Authorization: token} : {};
+}
+
+function mergeCookies(...headers: (string | undefined)[]): string {
+  const jar = new Map<string, string>();
+  for (const header of headers) {
+    for (const part of header?.split(/;\s*/) || []) {
+      const index = part.indexOf("=");
+      if (index > 0) jar.set(part.slice(0, index), part.slice(index + 1));
+    }
+  }
+  return [...jar].map(([key, value]) => `${key}=${value}`).join("; ");
+}
+
+type Dependencies = {
+  fetch: typeof fetch;
+  getCredential: () => Promise<string | undefined>;
+  totalBudgetMs: number;
+};
+
+export function createUserFinder(dependencies: Dependencies) {
+  return async function findUser({username, userAgent}: {
+    username: string;
+    userAgent: string;
+  }): Promise<ContentProps | false> {
+    username = normalizeThreadsUsername(username);
+    if (!/^[a-z0-9._]+$/i.test(username)) return false;
+    const deadline = new Deadline(dependencies.totalBudgetMs);
+    const controller = new AbortController();
+    let bestUser: RawProfile | undefined;
+    let pageCookies = "";
+    let html = "";
+    let credential: Record<string, string> = {};
+    const signal = () => AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(Math.max(1, Math.min(FINDUSER_FETCH_MS, deadline.remaining()))),
+    ]);
+    const absorbCookies = (response: Awaited<ReturnType<typeof fetch>>) => {
+      const cookies = response.headers.raw()["set-cookie"] || [];
+      pageCookies = mergeCookies(pageCookies, ...cookies.map(value => value.split(";")[0]));
+    };
+    const result = () => bestUser ? profileContent(bestUser, userAgent) : false;
+
+    const work = async () => {
+      // Carry the anonymous cookie jar across redirects without forwarding it off-site.
+      let pageUrl = getThreadsUrl(username);
+      for (let hop = 0; hop < 5 && !deadline.expired() && !controller.signal.aborted; hop++) {
+        const response = await dependencies.fetch(pageUrl, {
+          signal: signal(),
+          redirect: "manual",
+          headers: {
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "User-Agent": USER_AGENT,
+            ...(pageCookies ? {Cookie: pageCookies} : {}),
+          },
+        });
+        absorbCookies(response);
+        const location = response.headers.get("location");
+        if (response.status >= 300 && response.status < 400 && location) {
+          const nextUrl = new URL(location, pageUrl);
+          await response.arrayBuffer();
+          if (nextUrl.origin !== ORIGIN) return;
+          pageUrl = nextUrl.href;
+          continue;
+        }
+        html = await response.text();
+        if (!response.ok) return;
+        break;
+      }
+      const page = readProfilePage(html, username);
+      bestUser = page.user;
+      if (hasCompleteProfile(bestUser) || deadline.expired()) return;
+      const lsd = html.match(/"LSD",\s*\[\],\s*\{"token":"([^"]+)"\}/)?.[1];
+      if (!lsd) return;
+
+      const query = async (direct: boolean) => {
+        if (deadline.expired() || controller.signal.aborted) return;
+        const name = direct ? DIRECT_QUERY : FALLBACK_QUERY;
+        const descriptor: ProfileQuery | undefined = page.queries[name];
+        const userID = profileUserId(bestUser) || page.queries[DIRECT_QUERY]?.variables.userID;
+        if (direct && (typeof userID !== "string" || !/^\d+$/.test(userID))) return;
+        const variables = {
+          ...defaultVariables(direct),
+          ...(direct ? {canSeeFeedsTab: true, showLinkedIGStats: false} : {}),
+          ...descriptor?.variables,
+          ...(direct ? {userID} : {username}),
+        };
+        const cookies = mergeCookies(pageCookies, credential.Cookie);
+        const csrf = cookies.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1];
+        const actor = cookies.match(/(?:^|;\s*)ds_user_id=(\d+)/)?.[1] || "0";
+        const details: Record<string, string> = {
+          av: actor, __user: actor, __a: "1", __comet_req: "122", lsd,
+          jazoest: `2${Array.from(lsd).reduce((sum, letter) => sum + letter.charCodeAt(0), 0)}`,
+          fb_api_caller_class: "RelayModern",
+          fb_api_req_friendly_name: name,
+          server_timestamps: "true",
+          doc_id: descriptor?.queryID || QUERY_IDS[name],
+          variables: JSON.stringify(variables),
+        };
+        const fields: Record<string, RegExp> = {
+          __rev: /"client_revision":(\d+)/,
+          __hsi: /"hsi":"([^"]+)"/,
+          __hs: /"haste_session":"([^"]+)"/,
+          __spin_r: /"__spin_r":(\d+)/,
+          __spin_b: /"__spin_b":"([^"]+)"/,
+          __spin_t: /"__spin_t":(\d+)/,
+          __comet_req: /"comet_env":(\d+)/,
+        };
+        for (const [key, pattern] of Object.entries(fields)) {
+          const value = html.match(pattern)?.[1];
+          if (value) details[key] = value;
+        }
+        try {
+          const response = await dependencies.fetch(`${ORIGIN}/graphql/query`, {
+            method: "POST", signal: signal(), redirect: "error",
+            headers: {
+              "User-Agent": USER_AGENT,
+              "Content-Type": "application/x-www-form-urlencoded",
+              Origin: ORIGIN, Referer: getThreadsUrl(username),
+              "X-Fb-Lsd": lsd,
+              "X-Ig-App-Id": "238260118697367",
+              "X-Fb-Friendly-Name": name,
+              "X-Root-Field-Name": direct ? "xdt_text_app_user" : "xdt_text_app_user_by_username",
+              ...(actor === "0" && !credential.Authorization ? {"X-Logged-Out-Threads-Migrated-Request": "true"} : {}),
+              ...(csrf ? {"X-Csrftoken": csrf} : {}),
+              ...credential,
+              ...(cookies ? {Cookie: cookies} : {}),
+            },
+            body: new URLSearchParams(details).toString(),
+          });
+          absorbCookies(response);
+          const text = await response.text();
+          if (!response.ok) return;
+          const json: unknown = JSON.parse(text.replace(/^for\s*\(;;\);\s*/, ""));
+          const user = readProfileResponse(json, username);
+          if (user) bestUser = {...bestUser, ...user};
+          return user;
+        } catch {
+          // Do not log request details: headers and upstream errors can contain credentials.
+          return;
+        }
+      };
+
+      const direct = Boolean(profileUserId(bestUser) || page.queries[DIRECT_QUERY]?.variables.userID);
+      let queriedUser = await query(direct);
+      if (!queriedUser && !deadline.expired() && !controller.signal.aborted) {
+        credential = profileCredentialHeaders(await dependencies.getCredential());
+        if (Object.keys(credential).length) queriedUser = await query(direct);
+      }
+      // The username query omits public views; resolve its ID, then enrich once.
+      if (!direct && queriedUser && !hasCompleteProfile(bestUser) && profileUserId(bestUser)) {
+        await query(true);
+      }
+    };
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>(resolve => {
+      timer = setTimeout(() => { controller.abort(); resolve(); }, deadline.remaining());
+    });
+    try {
+      await Promise.race([work().catch(() => {}), timeout]);
+      return result();
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  };
+}
+
+export default createUserFinder({
+  fetch,
+  getCredential: async () => {
+    const credential = await login();
+    return credential ? credential.token : undefined;
+  },
+  totalBudgetMs: TOTAL_BUDGET_MS,
+});

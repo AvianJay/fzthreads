@@ -10,6 +10,19 @@ interface VideoProps {
   height?: number;
 }
 
+interface ProfileLinkProps {
+  title: string;
+  url: string;
+}
+
+interface ProfileProps {
+  displayName: string;
+  followerCount?: number;
+  publicViewCount?: number;
+  // Undefined means unavailable; an empty array means no profile links.
+  links?: ProfileLinkProps[];
+}
+
 interface ContentProps {
   description: string;
   title: string;
@@ -33,6 +46,7 @@ interface ContentProps {
   footerName?: string;
   footerIcon?: string;
   quotedPost?: QuotedPostProps;
+  profile?: ProfileProps;
   userAgent: string;
 }
 

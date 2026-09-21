@@ -1,4 +1,5 @@
 import escape from "escape-html";
+import renderProfileComponents from "./renderProfileComponents";
 import {
   appendQuoteToPlainText,
   stripDiscordSpoilerMarkers,
@@ -184,6 +185,7 @@ export default function renderSeo({ type, content }: DataProps) {
     <!DOCTYPE html>
     <html>
       <head>
+        ${type === "user" ? renderProfileComponents(content) : ""}
         <link rel="canonical" href="${url}" />
         <link rel="apple-touch-icon" href="${appleTouchIcon}" />
         <link rel="icon" href="${footerFavicon}"${
