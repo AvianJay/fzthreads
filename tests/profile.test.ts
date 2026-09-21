@@ -74,25 +74,23 @@ function textOf(value: ReturnType<typeof payload>): string {
   }).join("\n");
 }
 
-test("profile layout matches the reference, with HD avatar, ordered buttons and footer", () => {
+test("profile layout uses invisible spacing, ordered Markdown links, HD avatar and footer", () => {
   const value = payload();
   assert.equal(value.component.accent_color, null);
-  assert.deepEqual(value.component.components.map(c => c.type), [9, 14, 1, 14, 10]);
+  assert.deepEqual(value.component.components.map(c => c.type), [9, 14, 10, 14, 10]);
+  assert.ok(value.component.components.filter(c => c.type === 14).every(c => c.divider === false && c.spacing === 1));
   const section = value.component.components[0];
   assert.equal(section.type, 9);
   if (section.type !== 9) return;
   assert.equal(section.components[0].content, "### [尼摳](https://www.threads.com/@nicko948787)\nnicko948787");
   assert.equal(section.components[1].content, "尼摳會來摳你\n真的還是假的？\nmain: [@av1anjay](https://www.threads.com/@av1anjay)\n\n**👤 35 🔗 3**");
   assert.equal(section.accessory.media.url, "https://example.com/avatar-640.jpg");
-  const row = value.component.components[2];
-  assert.equal(row.type, 1);
-  if (row.type !== 1) return;
-  assert.deepEqual(row.components, [
-    {type: 2, style: 5, url: "https://dc.avianjay.sbs/", label: "角蛙社群"},
-    {type: 2, style: 5, url: "https://yee.avianjay.sbs/", label: "非常牛逼的機器人（應該吧）"},
-    {type: 2, style: 5, url: "https://discord.gg/earthonlinetw", label: "連結"},
-    {type: 2, style: 5, url: "https://www.instagram.com/nicko948787/", label: "Instagram"},
-  ]);
+  assert.deepEqual(value.component.components[2], {type: 10, content: [
+    "[角蛙社群](https://dc.avianjay.sbs/)",
+    "[非常牛逼的機器人（應該吧）](https://yee.avianjay.sbs/)",
+    "[連結](https://discord.gg/earthonlinetw)",
+    "[Instagram](https://www.instagram.com/nicko948787/)",
+  ].join(" · ")});
   assert.deepEqual(value.component.components.at(-1), {type: 10, content: "-# FzThreads"});
 });
 
@@ -118,34 +116,39 @@ test("missing avatar uses text components; missing biography/links leave no empt
   assert.deepEqual(minimal.component.components.map(c => c.type), [10, 14, 10]);
 });
 
-test("invalid button URLs are filtered; labels/rows and text fit Discord limits", () => {
+test("invalid links are filtered and Markdown links share the text budget with the biography", () => {
   const links = [
     {title: "bad", url: "javascript:alert(1)"},
     {title: "relative", url: "/relative"},
     {title: "credentials", url: "https://user:pass@example.com"},
     {title: "long", url: `https://example.com/${"x".repeat(600)}`},
-    ...Array.from({length: 7}, (_, i) => ({title: "😀".repeat(100), url: `https://example.com/${i}`})),
+    ...Array.from({length: 7}, (_, i) => ({title: "😀".repeat(100), url: `https://example.com/${i}/${"x".repeat(400)}`})),
   ];
   const value = payload({...user, bio_links: links, full_name: "*".repeat(1000), biography: "[x] </script> 😀\n".repeat(1000)});
-  const row = value.component.components.find(c => c.type === 1)!;
-  assert.equal(row.type, 1);
-  if (row.type !== 1) return;
-  assert.equal(row.components.length, 5);
-  assert.ok(row.components.every(b => b.label.length <= 80 && !/[\uD800-\uDBFF]$/.test(b.label)));
-  assert.ok(textOf(value).length < 4000);
+  const linkText = value.component.components[2];
+  assert.equal(linkText.type, 10);
+  if (linkText.type !== 10) return;
+  const matches = [...linkText.content.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g)];
+  assert.equal(matches.length, 6);
+  assert.ok(matches.every(match => match[1].length <= 80 && !/[\uD800-\uDBFF]$/.test(match[1])));
+  assert.doesNotMatch(linkText.content, /javascript:|relative|user:pass/);
+  const textLength = value.component.components.reduce((sum, c) => sum +
+    (c.type === 10 ? c.content.length : c.type === 9 ? c.components.reduce((n, t) => n + t.content.length, 0) : 0), 0);
+  assert.ok(textLength <= 4000);
   assert.ok(textOf(value).includes("🔗 7"));
 });
 
 test("inline JSON and Markdown remain safe, with OG/oEmbed preserved and posts unchanged", () => {
   const content = profileContent({...user, full_name: "[Name](https://bad.test) *name*",
     biography: '</script><script>alert("&")</script>\n@everyone',
-    bio_links: [{title: '</script><script>alert(1)</script>', url: "https://example.com?a=1&b=2"}],
+    bio_links: [{title: '[x](bad)\n</script><script>', url: "https://example.com/path(test)?a=1&b=2"}],
   }, "Discordbot/2.0");
   const html = renderSeo({type: "user", content});
   assert.equal([...html.matchAll(/<script\b/g)].length, 1);
   const json = html.match(/<script id="discord:component-embed" type="application\/json">(.*?)<\/script>/s)![1];
   assert.doesNotMatch(json, /[<>&]/);
   assert.ok(textOf(JSON.parse(json)).includes("\\[Name\\]\\(https://bad\\.test\\)"));
+  assert.ok(textOf(JSON.parse(json)).includes("[\\[x\\]\\(bad\\) \\</script\\>\\<script\\>](https://example.com/path%28test%29?a=1&b=2)"));
   assert.match(html, /property="og:title"/);
   assert.match(html, /property="og:image"/);
   assert.match(html, /application\/json\+oembed/);
@@ -248,25 +251,27 @@ test("Instagram follows the profile badge setting and does not increase the bio 
   for (const flag of [false, undefined, null, "true", 1]) {
     const content = profileContent({...user, show_text_post_app_badge: flag}, "Discordbot/2.0");
     assert.equal(content.profile?.instagramUrl, undefined);
-    const buttons = buildProfileComponents(content)!.component.components
-      .flatMap(c => c.type === 1 ? c.components : []);
-    assert.equal(buttons.length, 3);
-    assert.ok(buttons.every(b => b.label !== "Instagram"));
+    const linkText = buildProfileComponents(content)!.component.components[2];
+    assert.equal(linkText.type, 10);
+    if (linkText.type !== 10) continue;
+    assert.equal(linkText.content.split(" · ").length, 3);
+    assert.ok(!linkText.content.includes("Instagram"));
   }
   const value = payload({...user, bio_links: []});
-  const buttons = value.component.components.flatMap(c => c.type === 1 ? c.components : []);
-  assert.deepEqual(buttons, [{type: 2, style: 5, url: "https://www.instagram.com/nicko948787/", label: "Instagram"}]);
+  assert.deepEqual(value.component.components[2], {type: 10, content: "[Instagram](https://www.instagram.com/nicko948787/)"});
   assert.ok(textOf(value).includes("🔗 0"));
 });
 
-test("five bio links plus Instagram use two rows without dropping a bio link", () => {
+test("five bio links plus Instagram are all retained as Markdown links", () => {
   const value = payload({...user, bio_links: Array.from({length: 5}, (_, i) => ({
     title: `Link ${i}`, url: `https://example.com/${i}`,
   }))});
-  const rows = value.component.components.filter(c => c.type === 1);
-  assert.deepEqual(rows.map(row => row.components.length), [5, 1]);
-  assert.equal(rows[1].components[0].label, "Instagram");
-  assert.equal(rows[0].components[4].url, "https://example.com/4");
+  const links = value.component.components[2];
+  assert.equal(links.type, 10);
+  if (links.type !== 10) return;
+  assert.equal(links.content.split(" · ").length, 6);
+  assert.ok(links.content.endsWith("[Instagram](https://www.instagram.com/nicko948787/)"));
+  assert.ok(links.content.includes("[Link 4](https://example.com/4)"));
   assert.ok(textOf(value).includes("🔗 5"));
 });
 
@@ -274,13 +279,13 @@ test("only explicit public flags produce status badges", () => {
   const value = payload({...user, is_verified: true, text_post_app_is_private: true,
     text_post_app_has_fediverse_enabled: true});
   const text = textOf(value);
-  assert.ok(text.includes("-# ✅ 已認證 · 🔒 私人帳號 · 🌐 聯邦宇宙"));
+  assert.ok(text.includes("-# ✅ · 🔒 · 🌐"));
   for (const flag of [false, null, undefined, "true", "false", 1]) {
     assert.doesNotMatch(textOf(payload({...user, is_verified: flag,
-      text_post_app_is_private: flag, text_post_app_has_fediverse_enabled: flag})), /已認證|私人帳號|聯邦宇宙/);
+      text_post_app_is_private: flag, text_post_app_has_fediverse_enabled: flag})), /✅|🔒|🌐/);
   }
   // Instagram privacy must not be mistaken for the Threads privacy setting.
-  assert.doesNotMatch(textOf(payload({...user, is_private: true})), /私人帳號/);
+  assert.doesNotMatch(textOf(payload({...user, is_private: true})), /🔒/);
 });
 
 test("biography mentions are linked safely without changing plain OG text or view labels", () => {

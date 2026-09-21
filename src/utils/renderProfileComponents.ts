@@ -1,7 +1,6 @@
 import {getThreadsUrl, normalizeThreadsUsername, publicHttpUrl} from "./utils";
 
 type TextDisplay = {type: 10; content: string};
-type LinkButton = {type: 2; style: 5; url: string; label: string};
 type ProfileComponent =
   | TextDisplay
   | {
@@ -9,11 +8,7 @@ type ProfileComponent =
       components: TextDisplay[];
       accessory: {type: 11; media: {url: string}};
     }
-  | {type: 14; divider: true; spacing: 1}
-  | {
-      type: 1;
-      components: LinkButton[];
-    };
+  | {type: 14; divider: false; spacing: 1};
 
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
@@ -25,7 +20,8 @@ function escapeMarkdown(text: string): string {
   return text.replace(/([\\`*_{}\[\]()<>#+\-.!|~])/g, "\\$1");
 }
 
-function formatBiography(text: string): string {
+function formatBiography(text: string, maxLength: number): string {
+  if (maxLength <= 0) return "";
   const parts: {plain: string; markdown: string}[] = [];
   const literal = (plain: string) => parts.push({plain, markdown: escapeMarkdown(plain)});
   // Consume URLs as a whole. An @ inside a URL, email, or fediverse address
@@ -47,10 +43,10 @@ function formatBiography(text: string): string {
   literal(text.slice(offset));
 
   const full = parts.map(part => part.markdown).join("");
-  if (full.length <= 3000) return full;
+  if (full.length <= maxLength) return full;
   let result = "";
   for (const part of parts) {
-    const remaining = 2999 - result.length;
+    const remaining = maxLength - 1 - result.length;
     if (part.markdown.length <= remaining) {
       result += part.markdown;
     } else {
@@ -61,6 +57,13 @@ function formatBiography(text: string): string {
     }
   }
   return `${result}…`;
+}
+
+function markdownLink(label: string, url: string): string {
+  const name = truncate(escapeMarkdown(label.trim().replace(/\s+/g, " ") || "連結"), 80);
+  // Parentheses in valid URLs must not terminate the Markdown destination.
+  const destination = url.replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return `[${name}](${destination})`;
 }
 
 function compactViews(count: number): string {
@@ -94,9 +97,18 @@ export function buildProfileComponents(content: ContentProps) {
     type: 10,
     content: `### [${truncate(escapeMarkdown(profile.displayName || username), 256)}](${getThreadsUrl(username)})\n${escapeMarkdown(username)}${badges.length ? `\n-# ${badges.join(" · ")}` : ""}`,
   };
+  const profileLinks = (links || []).slice(0, 5).map(link => markdownLink(link.title, link.url));
+  const instagramUrl = publicHttpUrl(profile.instagramUrl, 512);
+  if (instagramUrl) profileLinks.push(markdownLink("Instagram", instagramUrl));
+  const linkContent = profileLinks.join(" · ");
+  const footerContent = "-# FzThreads";
+  const statsContent = stats.length ? `**${stats.join(" ")}**` : "";
+  // Links now count toward Discord's shared Text Display content budget.
+  const biographyLimit = Math.max(0, Math.min(3000,
+    4000 - heading.content.length - linkContent.length - footerContent.length - statsContent.length - 2));
   const body = [
-    formatBiography(content.description || ""),
-    stats.length ? `**${stats.join(" ")}**` : "",
+    formatBiography(content.description || "", biographyLimit),
+    statsContent,
   ].filter(Boolean).join("\n\n");
   const text: TextDisplay[] = [heading];
   if (body) text.push({type: 10, content: body});
@@ -104,23 +116,11 @@ export function buildProfileComponents(content: ContentProps) {
   const components: ProfileComponent[] = avatar
     ? [{type: 9, components: text, accessory: {type: 11, media: {url: avatar}}}]
     : [...text];
-  const separator = {type: 14, divider: true, spacing: 1} as const;
-  const buttons: LinkButton[] = (links || []).slice(0, 5).map(link => ({
-    type: 2,
-    style: 5,
-    url: link.url,
-    label: truncate(link.title.trim() || "連結", 80),
-  }));
-  const instagramUrl = publicHttpUrl(profile.instagramUrl, 512);
-  if (instagramUrl) buttons.push({type: 2, style: 5, url: instagramUrl, label: "Instagram"});
-  if (buttons.length) {
-    components.push(separator);
-    for (let offset = 0; offset < buttons.length; offset += 5) components.push({
-      type: 1,
-      components: buttons.slice(offset, offset + 5),
-    });
+  const separator = {type: 14, divider: false, spacing: 1} as const;
+  if (linkContent) {
+    components.push(separator, {type: 10, content: linkContent});
   }
-  components.push(separator, {type: 10, content: "-# FzThreads"});
+  components.push(separator, {type: 10, content: footerContent});
   return {component: {type: 17 as const, accent_color: null, components}};
 }
 
