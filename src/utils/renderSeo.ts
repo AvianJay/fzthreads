@@ -1,5 +1,6 @@
 import escape from "escape-html";
 import renderProfileComponents from "./renderProfileComponents";
+import {formatPollPlainText} from "./poll";
 import {
   appendQuoteToPlainText,
   stripDiscordSpoilerMarkers,
@@ -48,9 +49,10 @@ function joinDescriptionParts(first: string, second: string) {
 
 function getEmbedDescription(content: ContentProps) {
   const stats = content.oembedStat?.trim() || "";
-  const maxBodyLength = stats
+  const footer = joinDescriptionParts(formatPollPlainText(content.poll), stats);
+  const maxBodyLength = footer
     ? Math.max(
-        MAX_DESCRIPTION_LENGTH - stats.length - DESCRIPTION_SEPARATOR.length,
+        MAX_DESCRIPTION_LENGTH - footer.length - DESCRIPTION_SEPARATOR.length,
         0
       )
     : MAX_DESCRIPTION_LENGTH;
@@ -60,7 +62,7 @@ function getEmbedDescription(content: ContentProps) {
   );
   const truncatedBody = body ? truncateText(body, maxBodyLength) : "";
 
-  return joinDescriptionParts(truncatedBody, stats);
+  return joinDescriptionParts(truncatedBody, footer);
 }
 
 function getActivityOrigin(activityUrl?: string) {

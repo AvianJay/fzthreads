@@ -5,6 +5,7 @@ import https from "node:https";
 import {promisify} from "node:util";
 import { login, refreshToken } from "./igLogin";
 import {debugLog} from "../debugLog";
+import {readPoll} from "../poll";
 import {
   Deadline,
   GRAPHQL_POST_MS,
@@ -332,7 +333,10 @@ async function executePostQueryWithCookie(
     fb_api_caller_class: "RelayModern",
     fb_api_req_friendly_name: "BarcelonaPostPageDirectQuery",
     server_timestamps: "true",
-    variables: getPostPageVariables(postID),
+    variables: getPostPageVariables(
+      postID,
+      loggedInUserId !== "0" || Boolean(authorization)
+    ),
     doc_id: THREADS_POST_PAGE_DOC_ID,
   };
 
@@ -560,11 +564,11 @@ async function executeThreadsPostPageQueryWithCurl({
   }
 }
 
-function getPostPageVariables(postID: string): string {
+export function getPostPageVariables(postID: string, isLoggedIn = false): string {
   return JSON.stringify({
     postID,
     sort_order: "TOP",
-    __relay_internal__pv__BarcelonaIsLoggedInrelayprovider: false,
+    __relay_internal__pv__BarcelonaIsLoggedInrelayprovider: isLoggedIn,
     __relay_internal__pv__BarcelonaHasPostAuthorNotifControlsrelayprovider:
       true,
     __relay_internal__pv__BarcelonaShouldShowFediverseM1Featuresrelayprovider:
@@ -1001,7 +1005,10 @@ async function executeThreadsPostPageQuery(
     fb_api_caller_class: "RelayModern",
     fb_api_req_friendly_name: "BarcelonaPostPageDirectQuery",
     server_timestamps: "true",
-    variables: getPostPageVariables(postID),
+    variables: getPostPageVariables(
+      postID,
+      loggedInUserId !== "0" || Boolean(authorization)
+    ),
     doc_id: THREADS_POST_PAGE_DOC_ID,
   };
 
@@ -1385,6 +1392,32 @@ function hasModernPostData(responseJson: any, postCode: string): boolean {
   );
 }
 
+export async function enrichPostPoll(
+  responseJson: any,
+  postCode: string,
+  fetchAuthenticated?: () => Promise<any>
+): Promise<any> {
+  const getPoll = (response: any) => readPoll(
+    response?.data?.data?.edges?.[0]?.node?.thread_items
+      ?.find((item: any) => item?.post?.code === postCode)
+      ?.post?.caption_add_on?.poll
+  );
+  const poll = getPoll(responseJson);
+  if (!poll || poll.options.length > 0 || !fetchAuthenticated) return responseJson;
+
+  // Logged-out Threads responses can include a poll with null tallies.
+  // Use the existing authenticated query once, preserving the base on failure.
+  try {
+    const authenticated = await fetchAuthenticated();
+    if (hasModernPostData(authenticated, postCode) && getPoll(authenticated)?.options.length) {
+      return authenticated;
+    }
+  } catch {
+    // The available caption/media still make a useful preview.
+  }
+  return responseJson;
+}
+
 type QueryOutcome = {
   source: "direct" | "legacy";
   result: any;
@@ -1405,7 +1438,10 @@ function salvageLateResult(
     if (!content) return false;
 
     const existing = findPostCache.get(post);
-    if (!existing || existing.value === false) {
+    if (
+      !existing || existing.value === false ||
+      ((existing.value.poll?.options.length ?? 0) === 0 && Boolean(content.poll?.options.length))
+    ) {
       setPostCache(post, content);
       writeRuntimeDebug("findPost:salvage:cached", {
         post,
@@ -1447,6 +1483,9 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
   // We'll use whichever returns first with valid data
   writeRuntimeDebug("findPost:parallelQuery:start", {post});
 
+  let directSettled: QueryOutcome | null = null;
+  let legacySettled: QueryOutcome | null = null;
+
   const directQueryPromise: Promise<QueryOutcome> = (async () => {
     const anonymousResult = await fetchThreadsPostPageQueryWithRetries({
       postCode: post,
@@ -1460,9 +1499,34 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
       hasPostData(anonymousResult) &&
       hasModernPostData(anonymousResult, post)
     ) {
+      // Keep the anonymous post available if poll enrichment outlives the deadline.
+      directSettled = {source: "direct", result: anonymousResult, hasData: true};
       return {
         source: "direct" as const,
-        result: anonymousResult,
+        result: await enrichPostPoll(
+          anonymousResult,
+          post,
+          !deadline.expired()
+            ? async () => {
+                const credential = loginCookieHeader ? undefined : await login();
+                if (deadline.expired() || (!loginCookieHeader && !credential)) return;
+                const token = credential ? credential.token : undefined;
+                const cookieHeader = loginCookieHeader || (token?.startsWith("COOKIE:")
+                  ? await getLoginCookieHeader()
+                  : undefined);
+                if (!cookieHeader && !token?.startsWith("Bearer ")) return;
+                return fetchThreadsPostPageQueryWithRetries({
+                  postCode: post,
+                  postID,
+                  threadID,
+                  cookieHeader,
+                  authorization: token?.startsWith("Bearer ") ? token : undefined,
+                  step: "findPost:pollWithAuth:attempt",
+                  deadline,
+                });
+              }
+            : undefined
+        ),
         hasData: true,
       };
     }
@@ -1513,8 +1577,6 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
 
   // Track settled results so the deadline path can read them synchronously
   // instead of awaiting the still-pending promises (the old bug).
-  let directSettled: QueryOutcome | null = null;
-  let legacySettled: QueryOutcome | null = null;
   directQueryPromise.then(outcome => { directSettled = outcome; });
   legacyQueryPromise.then(outcome => { legacySettled = outcome; });
 
@@ -1612,6 +1674,7 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     // assignments happen inside .then callbacks it can't see.
     const direct = directSettled as QueryOutcome | null;
     const legacy = legacySettled as QueryOutcome | null;
+    salvageLateResult(post, postID, directQueryPromise, legacyQueryPromise);
 
     if (direct?.hasData) {
       fetchThreadsAPIJson = direct.result;
@@ -1622,7 +1685,6 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     } else {
       // No usable data before the deadline — let the still-running queries
       // finish in the background and backfill the cache for the re-crawl.
-      salvageLateResult(post, postID, directQueryPromise, legacyQueryPromise);
       fetchThreadsAPIJson = direct?.result || legacy?.result || null;
       usedSource = direct?.result ? 'direct' : 'legacy';
       if (!fetchThreadsAPIJson) {
@@ -1688,7 +1750,7 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
   return buildContentFromResponse(fetchThreadsAPIJson, post, postID);
 }
 
-function buildContentFromResponse(
+export function buildContentFromResponse(
   fetchThreadsAPIJson: any,
   post: string,
   postID: string
@@ -1883,6 +1945,7 @@ function buildContentFromResponse(
         postAppInfo.share_info.quoted_post.user.username
       ),
       caption: buildCaptionFromFragments(postAppInfo.share_info.quoted_post),
+      poll: readPoll(postAppInfo.share_info.quoted_post.caption_add_on?.poll),
       quoted: true,
     };
   }
@@ -1914,6 +1977,7 @@ function buildContentFromResponse(
     footerName: "Threads",
     footerIcon: THREADS_ICON_URL,
     quotedPost,
+    poll: readPoll(postObj.post.caption_add_on?.poll),
   };
 
   return returnJson;

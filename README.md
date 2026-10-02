@@ -9,6 +9,7 @@ Forked from [milanmdev/fixthreads](https://github.com/milanmdev/fixthreads), wit
 - Improved metadata rendering for Threads links
 - Mastodon-compatible metadata and ActivityPub-style responses
 - Better video preview/player metadata
+- Poll previews with options, vote counts, percentages, and ended status in Open Graph and Mastodon-compatible responses
 - Custom FzThreads favicon and provider icon metadata
 - Discord Components v2 profile previews with biography, follower/public view counts, and Markdown profile links; standard Open Graph/oEmbed previews remain available
 - Profile cards link biography @mentions, include Instagram when the profile shows its badge, and display confirmed verified/private/fediverse status

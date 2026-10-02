@@ -1,5 +1,6 @@
 import escape from "escape-html";
 import {getThreadsUrl, normalizeThreadsUsername} from "./utils";
+import {appendPollToPlainText} from "./poll";
 
 const HAIR_SPACE = " ";
 // Discord collapses consecutive <br> tags; a hair space between them keeps the blank line.
@@ -124,7 +125,7 @@ function buildQuotePlainText(quotedPost?: QuotedPostProps): string {
 
   const username = normalizeThreadsUsername(quotedPost.username);
   const header = `${QUOTE_PREFIX} @${username}`;
-  const caption = quotedPost.caption.trim();
+  const caption = appendPollToPlainText(quotedPost.caption.trim(), quotedPost.poll);
 
   if (!caption) return header;
 

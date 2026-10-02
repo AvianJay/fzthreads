@@ -27,6 +27,19 @@ interface ProfileProps {
   links?: ProfileLinkProps[];
 }
 
+interface PollOptionProps {
+  title: string;
+  votesCount?: number;
+}
+
+interface PollProps {
+  id?: string;
+  expiresAt?: string;
+  expired?: boolean;
+  options: PollOptionProps[];
+  votesCount?: number;
+}
+
 interface ContentProps {
   description: string;
   title: string;
@@ -50,6 +63,7 @@ interface ContentProps {
   footerName?: string;
   footerIcon?: string;
   quotedPost?: QuotedPostProps;
+  poll?: PollProps;
   profile?: ProfileProps;
   userAgent: string;
 }
@@ -78,4 +92,5 @@ interface QuotedPostProps {
   username: string;
   caption: string;
   quoted: boolean;
+  poll?: PollProps;
 }

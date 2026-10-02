@@ -1,4 +1,5 @@
 import escape from "escape-html";
+import {appendPollToPlainText, renderPoll} from "./poll";
 import {
   HTML_BLANK_LINE,
   QUOTE_PREFIX,
@@ -41,7 +42,7 @@ function buildQuoteHtml(quotedPost: QuotedPostProps): {
   const header = `<b>${QUOTE_PREFIX} <a href="${getThreadsUrl(
     username
   )}">@${escape(username)}</a></b>`;
-  const caption = quotedPost.caption.trim();
+  const caption = appendPollToPlainText(quotedPost.caption.trim(), quotedPost.poll);
 
   if (!caption) {
     return {html: `<blockquote>${header}</blockquote>`, hasSpoiler: false};
@@ -61,7 +62,7 @@ function buildHtmlContent(content: ContentProps): {
 } {
   const parts: string[] = [];
   let hasSpoiler = false;
-  const description = content.description?.trim();
+  const description = appendPollToPlainText(content.description?.trim() || "", content.poll);
   const stats = content.oembedStat?.trim();
 
   if (description) {
@@ -85,7 +86,7 @@ function buildHtmlContent(content: ContentProps): {
 
 function buildPlainTextContent(content: ContentProps): string {
   const description = appendQuoteToPlainText(
-    content.description?.trim() || "",
+    appendPollToPlainText(content.description?.trim() || "", content.poll),
     content.quotedPost
   );
   const stats = content.oembedStat?.trim() || "";
@@ -282,7 +283,7 @@ export default function renderActivity(content: ContentProps) {
     in_reply_to_id: null,
     in_reply_to_account_id: null,
     reblog: null,
-    poll: null,
+    poll: renderPoll(content.poll, activityId),
     card: null,
     application: {
       name: APPLICATION_NAME,
