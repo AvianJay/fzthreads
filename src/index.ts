@@ -55,7 +55,9 @@ app.use((req, _res, next) => {
   });
   next();
 });
-app.use(express.json());
+// Reject compressed request bodies so client data never reaches the zlib
+// Brotli decoder (CVE-2026-111497). No route reads req.body.
+app.use(express.json({inflate: false}));
 app.use(cors());
 app.use(express.static(STATIC_ASSET_DIR, {index: false}));
 app.get(["/favicon.ico", "/favicon.webp", "/touch-icon.webp"], (_req, res) => {
