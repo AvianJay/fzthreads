@@ -91,7 +91,7 @@ test("profile layout uses invisible spacing, ordered Markdown links, HD avatar a
     "[連結](https://discord.gg/earthonlinetw)",
     "[Instagram](https://www.instagram.com/nicko948787/)",
   ].join(" · ")});
-  assert.deepEqual(value.component.components.at(-1), {type: 10, content: "-# FzThreads"});
+  assert.deepEqual(value.component.components.at(-1), {type: 10, content: "-# <:fzthreads:1563516195968258058> FzThreads"});
 });
 
 test("unknown counts are omitted; zero is preserved; views use K/M with one decimal", () => {

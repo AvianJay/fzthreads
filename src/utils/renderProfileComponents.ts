@@ -101,7 +101,7 @@ export function buildProfileComponents(content: ContentProps) {
   const instagramUrl = publicHttpUrl(profile.instagramUrl, 512);
   if (instagramUrl) profileLinks.push(markdownLink("Instagram", instagramUrl));
   const linkContent = profileLinks.join(" · ");
-  const footerContent = "-# FzThreads";
+  const footerContent = "-# <:fzthreads:1563516195968258058> FzThreads";
   const statsContent = stats.length ? `**${stats.join(" ")}**` : "";
   // Links now count toward Discord's shared Text Display content budget.
   const biographyLimit = Math.max(0, Math.min(3000,
