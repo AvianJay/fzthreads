@@ -87,7 +87,7 @@ test("post card matches the example's layout, metadata, reply, quote, attachment
     "**❤️ 23 💬 12 🔄 2 ✈️ 18**");
   assert.equal(section.components[1].content,
     "⤴️ 正在回覆 [nicko948787](https://www.threads.com/@nicko948787)\n\n" +
-    "> 引用 [@quoted\\_user](https://www.threads.com/@quoted_user/post/Quoted123)\n> 引用內容\n> 第二行\n\n" +
+    "> 引用 [@quoted_user](https://www.threads.com/@quoted_user/post/Quoted123)\n> 引用內容\n> 第二行\n\n" +
     "貼去dc騙你朋友\n||spoiler test||");
   assert.deepEqual(value.component.components[2], {type: 10, content: "```\n文字內容...\n```"});
   assert.deepEqual(value.component.components.at(-1), {type: 10,
@@ -111,7 +111,7 @@ test("native spoiler fragments, literal pipes and current mention/link fields su
   const post = content(raw);
   const body = textOf(buildPostComponents(post));
   assert.ok(body.includes("literal \\|\\|pipes\\|\\| "));
-  assert.ok(body.includes("[@hello\\.world](https://www.threads.com/@hello.world)"));
+  assert.ok(body.includes("[@hello.world](https://www.threads.com/@hello.world)"));
   assert.ok(body.includes("<https://example.com/path?q=yes&x=2>"));
   assert.ok(body.includes("|| secret \\|\\|literal\\|\\| \\\\ ending||"));
   const captionOnly = {...raw, caption: {text: "plain ||literal||"}, text_post_app_info: {}};
@@ -257,7 +257,7 @@ test("text shortening keeps escaped characters, mentions, Unicode and spoiler bo
     assert.doesNotMatch(text, /(?<!\\)(?:\\\\)*\\$/);
   }
   const mentions = formatDiscordText("@test_user. me@example.com https://example.com/@path @name@server.tld");
-  assert.ok(mentions.includes("[@test\\_user](https://www.threads.com/@test_user)\\."));
+  assert.ok(mentions.includes("[@test_user](https://www.threads.com/@test_user)\\."));
   assert.doesNotMatch(mentions, /threads\.com\/@(?:example|path|name|server)/);
 });
 

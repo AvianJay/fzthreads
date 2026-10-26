@@ -53,7 +53,7 @@ export function markdownLink(label: string, url: string): string {
     .replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\\/g, "%5C");
   // These brackets and parentheses are the link delimiters themselves. Do
   // not put backslashes inside the generated `[]()` syntax.
-  const linkLabel = escapeMarkdown(label).replace(/\\([\[\]()])/g, "$1");
+  const linkLabel = escapeMarkdown(label).replace(/\\([\[\]()_.-])/g, "$1");
   return `[${linkLabel}](${destination})`;
 }
 

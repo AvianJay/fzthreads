@@ -147,7 +147,7 @@ test("inline JSON and Markdown remain safe, with OG/oEmbed preserved and legacy 
   assert.equal([...html.matchAll(/<script\b/g)].length, 1);
   const json = html.match(/<script id="discord:component-embed" type="application\/json">(.*?)<\/script>/s)![1];
   assert.doesNotMatch(json, /[<>&]/);
-  assert.ok(textOf(JSON.parse(json)).includes("[Name](https://bad\\.test)"));
+  assert.ok(textOf(JSON.parse(json)).includes("[Name](https://bad.test)"));
   assert.ok(textOf(JSON.parse(json)).includes("[[x](bad) \\</script\\>\\<script\\>](https://example.com/path%28test%29?a=1&b=2)"));
   assert.match(html, /property="og:title"/);
   assert.match(html, /property="og:image"/);
@@ -304,8 +304,8 @@ test("biography mentions are linked safely without changing plain OG text or vie
     text_post_app_public_views: {text_post_app_public_view_count: 156201}}, "Discordbot/2.0");
   const text = textOf(buildProfileComponents(content)!);
   assert.ok(text.includes("找[@av1anjay](https://www.threads.com/@av1anjay)"));
-  assert.ok(text.includes("[@hello\\.world](https://www.threads.com/@hello.world)"));
-  assert.ok(text.includes("[@test\\_user](https://www.threads.com/@test_user)\\."));
+  assert.ok(text.includes("[@hello.world](https://www.threads.com/@hello.world)"));
+  assert.ok(text.includes("[@test_user](https://www.threads.com/@test_user)\\."));
   for (const handle of ["example.com", "path", "other", "name", "server.tld"]) {
     assert.ok(!text.includes(`https://www.threads.com/@${handle}`));
   }
