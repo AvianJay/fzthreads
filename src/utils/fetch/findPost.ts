@@ -1344,13 +1344,17 @@ function getFragmentText(fragment: any): string {
     return fragment.linkified_in_app_url;
   }
 
-  const mentionUsername = fragment?.mention_fragment?.username;
+  const mentionUsername = fragment?.mention_fragment?.mentioned_user?.username ||
+    fragment?.mention_fragment?.username;
   if (typeof mentionUsername === "string" && mentionUsername) {
     return `@${mentionUsername}`;
   }
 
-  const linkUrl = fragment?.link_fragment?.url;
+  const linkUrl = fragment?.link_fragment?.uri || fragment?.link_fragment?.url;
   if (typeof linkUrl === "string") return linkUrl;
+
+  const tagName = fragment?.tag_fragment?.display_name;
+  if (typeof tagName === "string") return tagName;
 
   return "";
 }
@@ -1368,7 +1372,7 @@ function buildCaptionFromFragments(post: any): string {
       const text = getFragmentText(fragment);
       if (!text) return "";
 
-      if (fragment?.styling_info?.is_spoiler) {
+      if (fragment?.styling_info?.is_spoiler === true) {
         return `||${escapeDiscordSpoilerText(text)}||`;
       }
 
@@ -1760,7 +1764,7 @@ export function buildContentFromResponse(
   const thread_items =
     fetchThreadsAPIJson?.data?.data?.edges?.[0]?.node?.thread_items;
   if (!Array.isArray(thread_items)) return false;
-  const postIndex = thread_items.findIndex((item: any) => item.post.code === post);
+  const postIndex = thread_items.findIndex((item: any) => item?.post?.code === post);
   writeRuntimeDebug("findPost:postProcessing:index", {
     post,
     threadItemCount: Array.isArray(thread_items) ? thread_items.length : -1,
@@ -1799,14 +1803,25 @@ export function buildContentFromResponse(
   );
 
   /* Handle Captions */
-  let caption = buildCaptionFromFragments(postObj.post);
-  if (postIndex > 0) {
-    const replyUsername = normalizeThreadsUsername(
-      thread_items[postIndex - 1].post.user.username
-    );
-    caption = `⤴️ 正在回覆 @${replyUsername}\n\n${caption}`;
-  }
-  let description = caption;
+  const caption = buildCaptionFromFragments(postObj.post);
+  const rawReplyUsername = postAppInfo.reply_to_author?.username ||
+    (postIndex > 0 ? thread_items[postIndex - 1]?.post?.user?.username : undefined);
+  const replyToUsername = typeof rawReplyUsername === "string"
+    ? normalizeThreadsUsername(rawReplyUsername) : undefined;
+  const description = replyToUsername
+    ? `⤴️ 正在回覆 @${replyToUsername}\n\n${caption}` : caption;
+  const topicTag = typeof postAppInfo.tag_header?.display_name === "string"
+    ? postAppInfo.tag_header.display_name.trim() || undefined : undefined;
+  const textAttachment = buildCaptionFromFragments({
+    text_post_app_info: postAppInfo.snippet_attachment_info,
+  }) || undefined;
+  const mediaInfo = (item: any, position = 0) => ({
+    position,
+    spoiler: postAppInfo.is_spoiler_media === true ||
+      item?.text_post_app_info?.is_spoiler_media === true,
+    description: typeof item?.accessibility_caption === "string"
+      ? item.accessibility_caption : undefined,
+  });
 
   /* Setup oEmbed */
   let oembedStat = statsLine;
@@ -1818,12 +1833,13 @@ export function buildContentFromResponse(
   let hasReel = false;
   if (postObj.post.carousel_media && postObj.post.carousel_media.length > 0) {
     images = postObj.post.carousel_media
-      .map((item: any) => {
+      .map((item: any, position: number) => {
         const previewCandidate = item.image_versions2?.candidates?.[0];
         const primaryVideo = item.video_versions?.[0];
 
         if (primaryVideo) {
           vidData.push({
+            ...mediaInfo(item, position),
             url: primaryVideo.url,
             type: "instagram",
             previewUrl: previewCandidate?.url,
@@ -1842,6 +1858,7 @@ export function buildContentFromResponse(
         if (!previewCandidate?.url) return;
         return {
           url: previewCandidate.url,
+          ...mediaInfo(item, position),
         };
       })
       .filter((item: ImageProps | undefined): item is ImageProps =>
@@ -1863,15 +1880,17 @@ export function buildContentFromResponse(
       images = [
         {
           url: postAppInfo.link_preview_attachment.image_url,
+          ...mediaInfo(postObj.post),
         },
       ];
       imgType = "carousel";
     }
   } else {
-    if (postObj.post.image_versions2.candidates.length > 0) {
+    if (postObj.post.image_versions2?.candidates?.length > 0) {
       images = [
         {
           url: postObj.post.image_versions2.candidates[0].url,
+          ...mediaInfo(postObj.post),
         },
       ];
       imgType = "carousel";
@@ -1890,6 +1909,7 @@ export function buildContentFromResponse(
       .split("/")[0];
     if (reelId) {
       vidData.push({
+        ...mediaInfo(postObj.post),
         url: `https://d.ddinstagram.com/reel/${reelId}/`,
         type: "ddinstagram",
         previewUrl: postAppInfo.link_preview_attachment.image_url,
@@ -1901,21 +1921,14 @@ export function buildContentFromResponse(
   let video: VideoProps[] = [];
   if (postObj.post.video_versions || vidData.length >= 1) {
     if (vidData.length > 0) {
-      video = vidData.map((item: any) => {
-        return {
-          url: item.url,
-          type: item.type,
-          previewUrl: item.previewUrl,
-          width: item.width,
-          height: item.height,
-        };
-      });
+      video = vidData;
     } else {
       if (postObj.post.video_versions.length > 0) {
         const previewCandidate = postObj.post.image_versions2?.candidates?.[0];
         const primaryVideo = postObj.post.video_versions[0];
         video = [
           {
+            ...mediaInfo(postObj.post),
             url: primaryVideo.url,
             type: "instagram",
             previewUrl: previewCandidate?.url,
@@ -1940,12 +1953,14 @@ export function buildContentFromResponse(
     quoted: false,
   };
   if (postAppInfo.share_info?.quoted_post != null) {
+    const quoted = postAppInfo.share_info.quoted_post;
     quotedPost = {
       username: normalizeThreadsUsername(
-        postAppInfo.share_info.quoted_post.user.username
+        quoted.user?.username || ""
       ),
-      caption: buildCaptionFromFragments(postAppInfo.share_info.quoted_post),
-      poll: readPoll(postAppInfo.share_info.quoted_post.caption_add_on?.poll),
+      post: typeof quoted.code === "string" ? quoted.code : undefined,
+      caption: buildCaptionFromFragments(quoted),
+      poll: readPoll(quoted.caption_add_on?.poll),
       quoted: true,
     };
   }
@@ -1958,6 +1973,10 @@ export function buildContentFromResponse(
 
   let returnJson = {
     description,
+    caption,
+    replyToUsername,
+    topicTag,
+    textAttachment,
     title: authorName,
     images,
     post,
@@ -1972,6 +1991,8 @@ export function buildContentFromResponse(
     repostCount,
     sendCount,
     authorName,
+    authorDisplayName: postObj.post.user.full_name || username,
+    isVerified: postObj.post.user.is_verified === true,
     authorUrl: `https://www.threads.com/@${username}`,
     authorIcon: postObj.post.user.profile_pic_url,
     footerName: "Threads",

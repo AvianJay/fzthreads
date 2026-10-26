@@ -1,5 +1,6 @@
 import escape from "escape-html";
 import renderProfileComponents from "./renderProfileComponents";
+import renderPostComponents from "./renderPostComponents";
 import {formatPollPlainText} from "./poll";
 import {
   appendQuoteToPlainText,
@@ -8,6 +9,7 @@ import {
 import {
   formatThreadsAuthorName,
   getThreadsUrl,
+  isLegacyHost,
   normalizeThreadsUsername,
 } from "./utils";
 
@@ -115,7 +117,7 @@ function getSeoTitle(content: ContentProps) {
   return content.title;
 }
 
-export default function renderSeo({ type, content }: DataProps) {
+export default function renderSeo({ type, content, host }: DataProps) {
   if (!type || !content) {
     return "No type/content provided - this is not expected so if you're a client, report this to GitHub.";
   }
@@ -176,7 +178,10 @@ export default function renderSeo({ type, content }: DataProps) {
   )}&thumbnailUrl=${encodeURIComponent(
     authorIcon || previewImage
   )}&text=${encodeURIComponent(content.oembedStat)}`;
-  const activityUrl = content.activityUrl || "";
+  const legacy = isLegacyHost(host);
+  const activityUrl = legacy ? content.activityUrl || "" : "";
+  const components = legacy ? "" : type === "user"
+    ? renderProfileComponents(content) : type === "post" ? renderPostComponents(content) : "";
   const imageTags = (
     images.length > 0 ? images : authorIcon ? [{url: authorIcon}] : []
   )
@@ -187,7 +192,7 @@ export default function renderSeo({ type, content }: DataProps) {
     <!DOCTYPE html>
     <html>
       <head>
-        ${type === "user" ? renderProfileComponents(content) : ""}
+        ${components}
         <link rel="canonical" href="${url}" />
         <link rel="apple-touch-icon" href="${appleTouchIcon}" />
         <link rel="icon" href="${footerFavicon}"${

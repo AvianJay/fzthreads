@@ -7,7 +7,9 @@ Forked from [milanmdev/fixthreads](https://github.com/milanmdev/fixthreads), wit
 ## Features
 
 - Improved metadata rendering for Threads links
-- Mastodon-compatible metadata and ActivityPub-style responses
+- Discord Components v2 post previews with author/avatar, verification badge, topic tag, engagement counts, replies, quotes, text attachments, polls, and mixed image/video galleries in their original order
+- Native Discord text and media spoilers, including spoilers in quoted posts
+- Legacy Mastodon-compatible previews on `l.fzthreads.com`; this host never includes a Components v2 payload (including profiles)
 - Better video preview/player metadata
 - Poll previews with options, vote counts, percentages, and ended status in Open Graph and Mastodon-compatible responses
 - Custom FzThreads favicon and provider icon metadata
@@ -17,6 +19,10 @@ Forked from [milanmdev/fixthreads](https://github.com/milanmdev/fixthreads), wit
 ## Usage
 
 When you send a `threads.com` or `threads.net` link, replace the domain with `fzthreads.com` and then send it. (im broke)
+
+Use `l.fzthreads.com` instead for the previous Mastodon preview. Other hosts serve Components v2 with Open Graph/oEmbed fallbacks; only the legacy host advertises the Activity JSON alternate or negotiates it on a post URL. Explicit `/activity` and status API endpoints remain available.
+
+Post component previews follow Discord's 3,000-byte payload and 10-gallery-item limits. Long text is shortened with `…`, and media that cannot fit is omitted from the preview; the original Threads link still contains the full post.
 
 ## Docker
 

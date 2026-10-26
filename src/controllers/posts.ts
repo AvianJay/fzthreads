@@ -9,6 +9,7 @@ import {
   HttpError,
   decodeThreadsPostId,
   getThreadsUrl,
+  isLegacyHost,
   normalizeThreadsPostCode,
 } from "../utils/utils";
 
@@ -189,7 +190,7 @@ function sendActivityResponse(
     .send(JSON.stringify(renderActivity(content)));
 }
 
-function sendPostResponse(
+export function sendPostResponse(
   req: express.Request,
   res: express.Response,
   post: ContentProps
@@ -198,7 +199,7 @@ function sendPostResponse(
 
   res.vary("Accept");
 
-  if (wantsActivityJson(req)) {
+  if (isLegacyHost(req.get("host")) && wantsActivityJson(req)) {
     return sendActivityResponse(req, res, post);
   }
 
@@ -206,6 +207,7 @@ function sendPostResponse(
     renderSeo({
       type: "post",
       content,
+      host: req.get("host"),
     })
   );
 }
@@ -238,7 +240,7 @@ async function handlePostRequest(
 
     return sendPostResponse(req, res, post);
   } catch (e: unknown) {
-    if (wantsActivityJson(req)) {
+    if (isLegacyHost(req.get("host")) && wantsActivityJson(req)) {
       return next(new HttpError(502, "Unable to render activity JSON"));
     }
 

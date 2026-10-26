@@ -1,9 +1,11 @@
 interface ImageProps {
   url: string;
+  position?: number;
+  spoiler?: boolean;
+  description?: string;
 }
 
-interface VideoProps {
-  url: string;
+interface VideoProps extends ImageProps {
   type?: string;
   previewUrl?: string;
   width?: number;
@@ -42,6 +44,10 @@ interface PollProps {
 
 interface ContentProps {
   description: string;
+  caption?: string;
+  replyToUsername?: string;
+  topicTag?: string;
+  textAttachment?: string;
   title: string;
   images: ImageProps[];
   username: string;
@@ -58,6 +64,8 @@ interface ContentProps {
   repostCount?: number;
   sendCount?: number;
   authorName?: string;
+  authorDisplayName?: string;
+  isVerified?: boolean;
   authorUrl?: string;
   authorIcon?: string;
   footerName?: string;
@@ -71,6 +79,7 @@ interface ContentProps {
 interface DataProps {
   type: string;
   content: ContentProps;
+  host?: string;
 }
 
 interface OembedPostProps {
@@ -90,6 +99,7 @@ interface OembedPostProps {
 
 interface QuotedPostProps {
   username: string;
+  post?: string;
   caption: string;
   quoted: boolean;
   poll?: PollProps;

@@ -22,6 +22,7 @@ router.get("/@:username", async (req, res, next) => {
       renderSeo({
         type: "user",
         content: user,
+        host: req.get("host"),
       })
     );
   } catch (e: any) {

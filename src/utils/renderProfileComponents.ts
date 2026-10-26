@@ -1,4 +1,5 @@
 import {getThreadsUrl, normalizeThreadsUsername, publicHttpUrl} from "./utils";
+import {componentScript} from "./discordComponents";
 
 type TextDisplay = {type: 10; content: string};
 type ProfileComponent =
@@ -127,12 +128,5 @@ export function buildProfileComponents(content: ContentProps) {
 export default function renderProfileComponents(content: ContentProps): string {
   const payload = buildProfileComponents(content);
   if (!payload) return "";
-  // Script raw text cannot use HTML entities. Escape JSON code points instead.
-  const json = JSON.stringify(payload)
-    .replace(/</g, "\\u003c")
-    .replace(/>/g, "\\u003e")
-    .replace(/&/g, "\\u0026")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
-  return `<script id="discord:component-embed" type="application/json">${json}</script>`;
+  return componentScript(payload);
 }

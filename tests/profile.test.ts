@@ -138,7 +138,7 @@ test("invalid links are filtered and Markdown links share the text budget with t
   assert.ok(textOf(value).includes("🔗 7"));
 });
 
-test("inline JSON and Markdown remain safe, with OG/oEmbed preserved and posts unchanged", () => {
+test("inline JSON and Markdown remain safe, with OG/oEmbed preserved and legacy opting out", () => {
   const content = profileContent({...user, full_name: "[Name](https://bad.test) *name*",
     biography: '</script><script>alert("&")</script>\n@everyone',
     bio_links: [{title: '[x](bad)\n</script><script>', url: "https://example.com/path(test)?a=1&b=2"}],
@@ -157,7 +157,9 @@ test("inline JSON and Markdown remain safe, with OG/oEmbed preserved and posts u
   const legacy = {...post};
   delete legacy.profile;
   assert.equal(renderSeo({type: "post", content: post}), renderSeo({type: "post", content: legacy}));
-  assert.doesNotMatch(renderSeo({type: "post", content: post}), /discord:component-embed/);
+  assert.match(renderSeo({type: "post", content: post}), /discord:component-embed/);
+  assert.doesNotMatch(renderSeo({type: "post", content: post, host: "l.fzthreads.com"}), /discord:component-embed/);
+  assert.doesNotMatch(renderSeo({type: "user", content, host: "l.fzthreads.com"}), /discord:component-embed/);
 });
 
 test("parser selects profile-query data, keeps whitespace, and ignores viewer/post authors", () => {

@@ -18,6 +18,10 @@ const THREADS_POST_ALPHABET =
 const THREADS_ACCOUNT_DOMAIN_SUFFIX =
   /@(?:www\.)?threads\.(?:com|net)$/i;
 
+function isLegacyHost(host?: string): boolean {
+  return /^l\.fzthreads\.com(?::\d+)?$/i.test(host || "");
+}
+
 function publicHttpUrl(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string" || value.length > maxLength) return;
   try {
@@ -120,6 +124,7 @@ function decodeThreadsPostId(postId: string): string | undefined {
 }
 
 export {
+  isLegacyHost,
   publicHttpUrl,
   HttpError,
   GlobalVars,
