@@ -51,7 +51,10 @@ export function escapeMarkdown(text: string): string {
 export function markdownLink(label: string, url: string): string {
   const destination = url.replace(/\(/g, "%28").replace(/\)/g, "%29")
     .replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\\/g, "%5C");
-  return `[${escapeMarkdown(label)}](${destination})`;
+  // These brackets and parentheses are the link delimiters themselves. Do
+  // not put backslashes inside the generated `[]()` syntax.
+  const linkLabel = escapeMarkdown(label).replace(/\\([\[\]()])/g, "$1");
+  return `[${linkLabel}](${destination})`;
 }
 
 function textTokens(text: string): string[] {

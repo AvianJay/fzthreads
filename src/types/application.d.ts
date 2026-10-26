@@ -50,6 +50,12 @@ interface InlineEmojiProps {
   length: number;
 }
 
+interface EmojiSourceProps {
+  key: string;
+  url: string;
+  circle?: boolean;
+}
+
 interface DiscordEmojiProps {
   id: string;
   name: string;
@@ -64,6 +70,7 @@ interface ContentProps {
   textAttachment?: string;
   emojis?: InlineEmojiProps[];
   textAttachmentEmojis?: InlineEmojiProps[];
+  avatarEmoji?: EmojiSourceProps;
   discordEmojis?: Record<string, DiscordEmojiProps>;
   title: string;
   images: ImageProps[];

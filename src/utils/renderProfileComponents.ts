@@ -61,7 +61,8 @@ function formatBiography(text: string, maxLength: number): string {
 }
 
 function markdownLink(label: string, url: string): string {
-  const name = truncate(escapeMarkdown(label.trim().replace(/\s+/g, " ") || "連結"), 80);
+  const name = truncate(escapeMarkdown(label.trim().replace(/\s+/g, " ") || "連結")
+    .replace(/\\([\[\]()])/g, "$1"), 80);
   // Parentheses in valid URLs must not terminate the Markdown destination.
   const destination = url.replace(/\(/g, "%28").replace(/\)/g, "%29");
   return `[${name}](${destination})`;
@@ -91,9 +92,11 @@ export function buildProfileComponents(content: ContentProps) {
 
   const badges = authorBadges(profile);
 
+  const headingLabel = truncate(escapeMarkdown(profile.displayName || username)
+    .replace(/\\([\[\]()])/g, "$1"), 256);
   const heading: TextDisplay = {
     type: 10,
-    content: `### [${truncate(escapeMarkdown(profile.displayName || username), 256)}](${getThreadsUrl(username)})${badges ? ` ${badges}` : ""}\n${escapeMarkdown(username)}${profile.isPrivate === true ? "\n-# 🔒" : ""}`,
+    content: `### [${headingLabel}](${getThreadsUrl(username)})${badges ? ` ${badges}` : ""}\n${escapeMarkdown(username)}${profile.isPrivate === true ? "\n-# 🔒" : ""}`,
   };
   const profileLinks = (links || []).slice(0, 5).map(link => markdownLink(link.title, link.url));
   const instagramUrl = publicHttpUrl(profile.instagramUrl, 512);

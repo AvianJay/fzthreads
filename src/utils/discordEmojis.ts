@@ -2,15 +2,15 @@ import {promises as fs} from "node:fs";
 import path from "node:path";
 import {setTimeout as delay} from "node:timers/promises";
 import fetch from "node-fetch";
-import {downloadEmojiImage, EmojiFetch, encodeEmojiImage} from "./emojiImage";
-import {postEmojis} from "./threadsEmojis";
+import {downloadEmojiImage, EmojiFetch, EmojiImageOptions, encodeEmojiImage} from "./emojiImage";
+import {avatarEmojiSource, postEmojis} from "./threadsEmojis";
 
 const API = "https://discord.com/api/v10";
 const MANAGED_NAME = /^ft_([a-f0-9]{24})$/;
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const FAILURE_RETRY_MS = 30 * 1000;
 type Entry = DiscordEmojiProps & {key: string; lastUsed: number};
-type Source = Pick<InlineEmojiProps, "key" | "url">;
+type Source = EmojiSourceProps;
 
 export class DiscordEmojiError extends Error {
   constructor(message = "Discord emoji upload failed", readonly statusCode = 502) {
@@ -25,7 +25,7 @@ interface EmojiCacheOptions {
   limit?: number;
   cleanupBatchSize?: number;
   fetch?: EmojiFetch;
-  encodeImage?: typeof encodeEmojiImage;
+  encodeImage?: (input: Buffer, options?: EmojiImageOptions) => Promise<string>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -147,7 +147,9 @@ export class DiscordEmojiCache {
       await this.synchronize();
       if (this.entries.has(source.key)) return;
       if (!/^[a-f0-9]{24}$/.test(source.key)) throw new DiscordEmojiError("Invalid emoji key");
-      const image = await this.encodeImage(await downloadEmojiImage(source.url, this.fetch));
+      const image = await this.encodeImage(await downloadEmojiImage(source.url, this.fetch), {
+        circle: source.circle === true,
+      });
       await this.makeRoom();
       const created = readEmoji(await this.request(`/applications/${this.applicationId}/emojis`, "POST", {
         name: `ft_${source.key}`, image,
@@ -319,5 +321,11 @@ export async function preparePostEmojis(post: ContentProps, preload = false): Pr
     limit: positiveInteger(process.env.DISCORD_EMOJI_CACHE_LIMIT, 2000, 2000),
     cleanupBatchSize: positiveInteger(process.env.DISCORD_EMOJI_CLEANUP_BATCH_SIZE, 50, 2000),
   });
-  return {...post, discordEmojis: await defaultCache.prepare(postEmojis(post), preload)};
+  const avatarEmoji = post.avatarEmoji || avatarEmojiSource(post.authorIcon);
+  const sources = postEmojis({...post, avatarEmoji});
+  return {
+    ...post,
+    avatarEmoji,
+    discordEmojis: await defaultCache.prepare(sources, preload),
+  };
 }

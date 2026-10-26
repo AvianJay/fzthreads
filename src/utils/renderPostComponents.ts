@@ -80,6 +80,11 @@ export function buildPostComponents(content: ContentProps): ComponentEmbed {
   const badges = authorBadges(content);
   const author = `**${markdownLink(truncateText(displayName, 128), profileUrl)}**` +
     (badges ? ` ${badges}` : "");
+  const avatarEmoji = content.avatarEmoji && content.discordEmojis?.[content.avatarEmoji.key];
+  const avatarMarkup = avatarEmoji && /^\d{1,20}$/.test(avatarEmoji.id) &&
+    /^[A-Za-z0-9_]{2,32}$/.test(avatarEmoji.name)
+    ? `<${avatarEmoji.animated ? "a" : ""}:${avatarEmoji.name}:${avatarEmoji.id}>`
+    : "";
   const topic = content.topicTag?.trim();
   const handle = markdownLink(username, profileUrl) + (topic
     ? ` > ${markdownLink(truncateText(topic, 80), `https://www.threads.com/search?q=${encodeURIComponent(topic)}`)}` : "");
@@ -89,9 +94,8 @@ export function buildPostComponents(content: ContentProps): ComponentEmbed {
     return typeof count === "number" && Number.isFinite(count) && count >= 0
       ? [`${emoji} ${formatNumber(count)}`] : [];
   }).join(" ") || formatDiscordText(content.oembedStat || "", 200);
-  const heading: TextDisplay = {
-    type: 10, content: `${author}\n${handle}${stats ? `\n\n**${stats}**` : ""}`,
-  };
+  const headingContent = `${avatarMarkup ? `## ${avatarMarkup} ` : ""}${author}\n${handle}${stats ? `\n\n**${stats}**` : ""}`;
+  const heading: TextDisplay = {type: 10, content: headingContent};
   const reply = content.replyToUsername
     ? `⤴️ 正在回覆 ${markdownLink(content.replyToUsername, getThreadsUrl(content.replyToUsername))}` : "";
   const quote = content.quotedPost?.quoted && content.quotedPost.username ? content.quotedPost : undefined;
@@ -122,7 +126,9 @@ export function buildPostComponents(content: ContentProps): ComponentEmbed {
     const body = [reply, quoted, bodyText, pollText].filter(Boolean).join("\n\n");
     const text: TextDisplay[] = [heading];
     if (body) text.push({type: 10, content: body});
-    const components: DiscordComponent[] = includeAvatar && avatar
+    const components: DiscordComponent[] = avatarMarkup
+      ? [{type: 10, content: [headingContent, body].filter(Boolean).join("\n\n")}]
+      : includeAvatar && avatar
       ? [{type: 9, components: text, accessory: {type: 11, media: {url: avatar}}}]
       : [...text];
     if (attachmentBody) {

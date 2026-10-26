@@ -6,6 +6,9 @@ import {emojiImageUrl} from "./threadsEmojis";
 export type EmojiFetch = (url: string, init?: RequestInit) => Promise<Response>;
 export const MAX_EMOJI_BYTES = 256 * 1024;
 const MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024;
+export interface EmojiImageOptions {
+  circle?: boolean;
+}
 
 export async function downloadEmojiImage(url: string, fetchImage: EmojiFetch = fetch): Promise<Buffer> {
   for (let redirects = 0; redirects <= 3; redirects++) {
@@ -36,7 +39,7 @@ export async function downloadEmojiImage(url: string, fetchImage: EmojiFetch = f
   throw new Error("Too many emoji image redirects");
 }
 
-export async function encodeEmojiImage(input: Buffer): Promise<string> {
+export async function encodeEmojiImage(input: Buffer, imageOptions: EmojiImageOptions = {}): Promise<string> {
   const options = {animated: true, limitInputPixels: 32 * 1024 * 1024};
   const metadata = await sharp(input, options).metadata();
   if (!["png", "jpeg", "gif", "webp", "heif"].includes(metadata.format || "")) {
@@ -44,14 +47,20 @@ export async function encodeEmojiImage(input: Buffer): Promise<string> {
   }
   const animated = (metadata.pages || 1) > 1;
   // Preserve the original animation when it already fits Discord's limits.
-  if (metadata.format === "gif" && input.length <= MAX_EMOJI_BYTES &&
+  if (!imageOptions.circle && metadata.format === "gif" && input.length <= MAX_EMOJI_BYTES &&
     (metadata.width || 0) <= 128 && (metadata.pageHeight || metadata.height || 0) <= 128) {
     return `data:image/gif;base64,${input.toString("base64")}`;
   }
   for (const size of [128, 96, 64]) {
-    const pipeline = sharp(input, options).resize(size, size, {
-      fit: "contain", background: {r: 0, g: 0, b: 0, alpha: 0},
-    }).timeout({seconds: 10});
+    let pipeline = sharp(input, options).resize(size, size, {
+      fit: imageOptions.circle ? "cover" : "contain",
+      background: {r: 0, g: 0, b: 0, alpha: 0},
+    });
+    if (imageOptions.circle) {
+      const mask = Buffer.from(`<svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="white"/></svg>`);
+      pipeline = pipeline.composite([{input: mask, blend: "dest-in"}]);
+    }
+    pipeline = pipeline.timeout({seconds: 10});
     const output = await (animated
       ? pipeline.gif({colours: size === 128 ? 128 : 64, effort: 3})
       : pipeline.png()).toBuffer();

@@ -11,12 +11,12 @@ import fetch, {RequestInit, Response} from "node-fetch";
 import sharp from "sharp";
 import {createPostsRouter} from "../src/controllers/posts";
 import {DiscordEmojiCache, DiscordEmojiError} from "../src/utils/discordEmojis";
-import {componentJson, discordTextFormatter} from "../src/utils/discordComponents";
+import {componentJson, discordTextFormatter, markdownLink} from "../src/utils/discordComponents";
 import {downloadEmojiImage, encodeEmojiImage, MAX_EMOJI_BYTES} from "../src/utils/emojiImage";
 import {buildContentFromResponse} from "../src/utils/fetch/findPost";
 import {buildPostComponents} from "../src/utils/renderPostComponents";
 import renderSeo from "../src/utils/renderSeo";
-import {emojiImageUrl, postEmojis, readInlineEmoji} from "../src/utils/threadsEmojis";
+import {avatarEmojiSource, emojiImageUrl, postEmojis, readInlineEmoji} from "../src/utils/threadsEmojis";
 import {HttpError} from "../src/utils/utils";
 
 const code = "DeP23AyE-3V";
@@ -118,6 +118,32 @@ test("the real inline_sticker shape retains its exact position, ID and GIF URL",
   changedUrl.inline_sticker_fragment.sticker_url = "https://media2.giphy.com/media/v1.rotated/oQdZu3Q2cGpUEJw6xo/200.gif?rotated=1";
   assert.equal(readInlineEmoji(changedUrl)?.key, post.emojis![0].key);
   assert.equal(readInlineEmoji({plaintext: "🙂"}), undefined);
+});
+
+test("the uploaded avatar uses the reference CV2 heading and the old thumbnail is the fallback", () => {
+  const post = content();
+  post.publishedTime = new Date(1789749600 * 1000).toISOString();
+  post.authorIcon = "https://example.com/avatar.png";
+  const avatar = avatarEmojiSource("https://scontent.cdninstagram.com/avatar.jpg");
+  assert.ok(avatar);
+  assert.equal(avatar.circle, true);
+  post.avatarEmoji = avatar;
+  post.discordEmojis = {[avatar.key]: {id: "1488103101964615821", name: "cat_shock", animated: false}};
+  const ready = buildPostComponents(post);
+  assert.deepEqual(ready.component.components.map(component => component.type), [10, 10]);
+  const first = ready.component.components[0];
+  assert.equal(first.type, 10);
+  if (first.type !== 10) return;
+  assert.match(first.content, /^## <:cat_shock:1488103101964615821> \*\*\[陳之漢\]\(https:\/\/www\.threads\.com\/@power3067830678\)\*\*/);
+  assert.match(first.content, /\n\n不負責民調 看看\?/);
+  assert.match(ready.component.components.at(-1)?.type === 10 ? ready.component.components.at(-1).content : "", /<t:1789749600:f>/);
+  assert.equal(markdownLink("Nicko", "https://www.threads.com/@nicko948787"), "[Nicko](https://www.threads.com/@nicko948787)");
+
+  const fallback = buildPostComponents({...post, discordEmojis: {}});
+  assert.deepEqual(fallback.component.components.map(component => component.type), [9, 10]);
+  const section = fallback.component.components[0];
+  assert.equal(section.type, 9);
+  if (section.type === 9) assert.equal(section.accessory.media.url, "https://example.com/avatar.png");
 });
 
 test("CV2 replaces only extracted spans and preserves spoilers, quotes, attachments and byte limits", () => {
@@ -395,6 +421,18 @@ test("image conversion bounds file size/dimensions and retains multiple animated
   const png = await sharp({create: {width: 300, height: 200, channels: 4, background: "red"}}).png().toBuffer();
   assert.ok((await encodeEmojiImage(png)).startsWith("data:image/png;base64,"));
   await assert.rejects(encodeEmojiImage(Buffer.from('<svg width="1" height="1"></svg>')));
+});
+
+test("avatar conversion applies a transparent circular mask", async () => {
+  const png = await sharp({create: {width: 300, height: 200, channels: 4, background: {r: 255, g: 0, b: 0, alpha: 1}}}).png().toBuffer();
+  const encoded = await encodeEmojiImage(png, {circle: true});
+  const image = Buffer.from(encoded.split(",")[1], "base64");
+  const raw = await sharp(image).raw().toBuffer({resolveWithObject: true});
+  const alpha = (x: number, y: number) => raw.data[(y * raw.info.width + x) * raw.info.channels + 3];
+  assert.equal(raw.info.width, 128);
+  assert.equal(raw.info.height, 128);
+  assert.equal(alpha(0, 0), 0);
+  assert.equal(alpha(64, 64), 255);
 });
 
 test("all post/share preload routes wait for uploads and return ready CV2 HTML", async t => {

@@ -7,13 +7,25 @@ export function emojiImageUrl(value: unknown): string | undefined {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password || url.port) return;
-    if (!["giphy.com", "fbcdn.net", "cdninstagram.com"].some(domain =>
+    if (!["giphy.com", "fbcdn.net", "cdninstagram.com", "threads.com", "threads.net", "instagram.com"].some(domain =>
       url.hostname === domain || url.hostname.endsWith(`.${domain}`)
     )) return;
     return url.href;
   } catch {
     return;
   }
+}
+
+export function avatarEmojiSource(value: unknown): EmojiSourceProps | undefined {
+  const url = emojiImageUrl(value);
+  if (!url) return;
+  const parsed = new URL(url);
+  const identity = `avatar:${parsed.origin}${parsed.pathname}`;
+  return {
+    key: createHash("sha256").update(identity).digest("hex").slice(0, 24),
+    url,
+    circle: true,
+  };
 }
 
 export function readInlineEmoji(fragment: any): Pick<InlineEmojiProps, "key" | "url"> | undefined {
@@ -27,10 +39,11 @@ export function readInlineEmoji(fragment: any): Pick<InlineEmojiProps, "key" | "
   return {key: createHash("sha256").update(identity).digest("hex").slice(0, 24), url};
 }
 
-export function postEmojis(post: ContentProps): InlineEmojiProps[] {
+export function postEmojis(post: ContentProps): EmojiSourceProps[] {
   return [
     ...(post.emojis || []),
     ...(post.textAttachmentEmojis || []),
     ...(post.quotedPost?.emojis || []),
+    ...(post.avatarEmoji ? [post.avatarEmoji] : []),
   ];
 }
