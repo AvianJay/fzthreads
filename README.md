@@ -36,8 +36,9 @@ Set `DISCORD_BOT_TOKEN` in the runtime environment (or your existing local doten
 | `DISCORD_EMOJI_CACHE_FILE` | `generated/discord-emojis.json` | Persistent emoji IDs and last-use times |
 | `DISCORD_EMOJI_CACHE_LIMIT` | `2000` | Application emoji capacity to use (maximum 2000, including existing emojis) |
 | `DISCORD_EMOJI_CLEANUP_BATCH_SIZE` | `50` | Number of old managed emojis to remove when capacity is reached |
+| `DISCORD_AVATAR_WAIT_MS` | `900` | Maximum normal-request wait for the author's avatar emoji before falling back to the original thumbnail |
 
-An ordinary post/share request returns immediately after fetching the post, whether its emojis are fully, partially, or not yet cached. Cached emojis appear in CV2; missing emojis and their placeholders are omitted while they upload in the background. The author's avatar is also uploaded as a circular application emoji; until it is ready, the existing avatar thumbnail remains the fallback. Later requests use the uploaded emojis. Concurrent requests share uploads. Captions, quoted captions, text attachments, and their spoiler positions are supported; ordinary Unicode emoji remain unchanged.
+An ordinary post/share request waits up to `DISCORD_AVATAR_WAIT_MS` for the author's avatar emoji, then returns whether its emojis are fully, partially, or not yet cached. Cached emojis appear in CV2; missing emojis and their placeholders are omitted while they upload in the background. The author's avatar is uploaded first as a circular application emoji; if it is slow or fails, the existing avatar thumbnail remains the fallback. Later requests use the uploaded emojis. Concurrent requests share uploads. Captions, quoted captions, text attachments, and their spoiler positions are supported; ordinary Unicode emoji remain unchanged.
 
 Append `/preload` to wait for missing emoji uploads, then receive the same preview HTML. A full cache hit returns immediately, including while background cache revalidation is pending:
 

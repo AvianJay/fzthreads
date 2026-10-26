@@ -10,7 +10,7 @@ import express from "express";
 import fetch, {RequestInit, Response} from "node-fetch";
 import sharp from "sharp";
 import {createPostsRouter} from "../src/controllers/posts";
-import {DiscordEmojiCache, DiscordEmojiError} from "../src/utils/discordEmojis";
+import {DiscordEmojiCache, DiscordEmojiError, preparePostEmojisWithCache} from "../src/utils/discordEmojis";
 import {componentJson, discordTextFormatter, markdownLink} from "../src/utils/discordComponents";
 import {downloadEmojiImage, encodeEmojiImage, MAX_EMOJI_BYTES} from "../src/utils/emojiImage";
 import {buildContentFromResponse} from "../src/utils/fetch/findPost";
@@ -197,6 +197,45 @@ test("normal requests return before upload, concurrent preloads share it, and wa
   assert.equal(result[key(1)].animated, true);
   assert.deepEqual(await cache.prepare([source(1)]), result);
   assert.equal(mock.count("POST"), 1);
+});
+
+test("normal requests prioritize the avatar, wait briefly for it, and leave inline uploads in the background", async t => {
+  const {cache, mock} = await setup(t);
+  const avatar = {key: key(2), url, circle: true};
+  const post = content();
+  post.avatarEmoji = avatar;
+  post.emojis = [{...source(1), offset: 0, length: 1}];
+  const ready = await preparePostEmojisWithCache(post, cache, false, 900);
+  assert.ok(ready.discordEmojis?.[avatar.key], "the fast avatar upload is included in the response");
+  assert.equal(ready.discordEmojis?.[key(1)], undefined, "inline emoji stays background-only");
+  assert.equal(mock.count("POST"), 1);
+  await cache.prepare([source(1)], true);
+  assert.equal(mock.count("POST"), 2);
+
+  const blocked = await setup(t);
+  const blockedAvatar = {key: key(4), url, circle: true};
+  const blockedPost = content();
+  blockedPost.avatarEmoji = blockedAvatar;
+  const started = deferred();
+  const release = deferred();
+  blocked.mock.beforeCreate = async () => {started.resolve(); await release.promise;};
+  const response = preparePostEmojisWithCache(blockedPost, blocked.cache, false, 15);
+  await started.promise;
+  const fallback = await response;
+  assert.equal(fallback.discordEmojis?.[blockedAvatar.key], undefined, "a slow avatar falls back within the bound");
+  release.resolve();
+  await blocked.cache.prepare([blockedAvatar], true);
+});
+
+test("a normal avatar upload failure keeps the preview and uses the fallback thumbnail", async t => {
+  const {cache, mock} = await setup(t);
+  const avatar = {key: key(6), url, circle: true};
+  const post = content();
+  post.avatarEmoji = avatar;
+  mock.override = () => json({message: "discord failure"}, 500);
+  const prepared = await preparePostEmojisWithCache(post, cache, false, 100);
+  assert.equal(prepared.discordEmojis?.[avatar.key], undefined);
+  assert.equal(prepared.avatarEmoji?.key, avatar.key);
 });
 
 test("CV2 omits only missing emoji spans in captions, quotes and attachments", () => {

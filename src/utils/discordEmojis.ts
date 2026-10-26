@@ -313,6 +313,71 @@ export class DiscordEmojiCache {
 }
 
 let defaultCache: DiscordEmojiCache | undefined;
+
+const DEFAULT_AVATAR_WAIT_MS = 900;
+
+function avatarWaitMs(): number {
+  const value = Number(process.env.DISCORD_AVATAR_WAIT_MS);
+  return Number.isFinite(value) && value >= 0
+    ? Math.min(Math.floor(value), 5000)
+    : DEFAULT_AVATAR_WAIT_MS;
+}
+
+async function resolveAvatarWithin(
+  task: Promise<Record<string, DiscordEmojiProps>>,
+  timeoutMs: number
+): Promise<Record<string, DiscordEmojiProps>> {
+  // Keep the upload running after a timeout so the next request can use it,
+  // but do not let a slow Discord request delay this page response.
+  void task.catch(() => {});
+  if (timeoutMs <= 0) return {};
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<Record<string, DiscordEmojiProps>>(resolve => {
+    timer = setTimeout(() => resolve({}), timeoutMs);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([task, timeout]);
+  } catch {
+    return {};
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function preparePostEmojisWithCache(
+  post: ContentProps,
+  cache: DiscordEmojiCache,
+  preload = false,
+  avatarTimeoutMs = avatarWaitMs()
+): Promise<ContentProps> {
+  const avatarEmoji = post.avatarEmoji || avatarEmojiSource(post.authorIcon);
+  const inlineSources = postEmojis(post).filter(source => source.key !== avatarEmoji?.key);
+
+  if (preload) {
+    const sources = avatarEmoji ? [...inlineSources, avatarEmoji] : inlineSources;
+    return {
+      ...post,
+      avatarEmoji,
+      discordEmojis: await cache.prepare(sources, true),
+    };
+  }
+
+  // Enqueue the avatar first. Inline stickers remain a background operation,
+  // while a warm or fast avatar hit can still be included in this response.
+  const avatarTask = avatarEmoji
+    ? cache.prepare([avatarEmoji], true)
+    : Promise.resolve<Record<string, DiscordEmojiProps>>({});
+  void avatarTask.catch(() => {});
+  const inlineResult = await cache.prepare(inlineSources, false);
+  const avatarResult = await resolveAvatarWithin(avatarTask, avatarTimeoutMs);
+  return {
+    ...post,
+    avatarEmoji,
+    discordEmojis: {...inlineResult, ...avatarResult},
+  };
+}
+
 export async function preparePostEmojis(post: ContentProps, preload = false): Promise<ContentProps> {
   defaultCache ??= new DiscordEmojiCache({
     token: process.env.DISCORD_BOT_TOKEN,
@@ -321,11 +386,5 @@ export async function preparePostEmojis(post: ContentProps, preload = false): Pr
     limit: positiveInteger(process.env.DISCORD_EMOJI_CACHE_LIMIT, 2000, 2000),
     cleanupBatchSize: positiveInteger(process.env.DISCORD_EMOJI_CLEANUP_BATCH_SIZE, 50, 2000),
   });
-  const avatarEmoji = post.avatarEmoji || avatarEmojiSource(post.authorIcon);
-  const sources = postEmojis({...post, avatarEmoji});
-  return {
-    ...post,
-    avatarEmoji,
-    discordEmojis: await defaultCache.prepare(sources, preload),
-  };
+  return preparePostEmojisWithCache(post, defaultCache, preload);
 }
