@@ -42,12 +42,29 @@ interface PollProps {
   votesCount?: number;
 }
 
+interface InlineEmojiProps {
+  key: string;
+  url: string;
+  // UTF-16 offsets in the stored caption, including upstream spoiler markers.
+  offset: number;
+  length: number;
+}
+
+interface DiscordEmojiProps {
+  id: string;
+  name: string;
+  animated: boolean;
+}
+
 interface ContentProps {
   description: string;
   caption?: string;
   replyToUsername?: string;
   topicTag?: string;
   textAttachment?: string;
+  emojis?: InlineEmojiProps[];
+  textAttachmentEmojis?: InlineEmojiProps[];
+  discordEmojis?: Record<string, DiscordEmojiProps>;
   title: string;
   images: ImageProps[];
   username: string;
@@ -103,4 +120,5 @@ interface QuotedPostProps {
   caption: string;
   quoted: boolean;
   poll?: PollProps;
+  emojis?: InlineEmojiProps[];
 }

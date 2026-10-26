@@ -6,6 +6,7 @@ import {promisify} from "node:util";
 import { login, refreshToken } from "./igLogin";
 import {debugLog} from "../debugLog";
 import {readPoll} from "../poll";
+import {readInlineEmoji} from "../threadsEmojis";
 import {
   Deadline,
   GRAPHQL_POST_MS,
@@ -1359,7 +1360,7 @@ function getFragmentText(fragment: any): string {
   return "";
 }
 
-function buildCaptionFromFragments(post: any): string {
+function buildCaptionFromFragments(post: any, emojis: InlineEmojiProps[] = []): string {
   const fragments = post?.text_post_app_info?.text_fragments?.fragments;
   if (!Array.isArray(fragments) || fragments.length === 0) {
     // Escape literal || everywhere so the only unescaped markers in the
@@ -1367,16 +1368,18 @@ function buildCaptionFromFragments(post: any): string {
     return escapeDiscordSpoilerText(post?.caption?.text || "");
   }
 
+  let offset = 0;
   return fragments
     .map((fragment: any) => {
-      const text = getFragmentText(fragment);
+      const emoji = readInlineEmoji(fragment);
+      const text = getFragmentText(fragment) || (emoji ? "□" : "");
       if (!text) return "";
-
-      if (fragment?.styling_info?.is_spoiler === true) {
-        return `||${escapeDiscordSpoilerText(text)}||`;
-      }
-
-      return escapeDiscordSpoilerText(text);
+      const literal = escapeDiscordSpoilerText(text);
+      const wrapper = fragment?.styling_info?.is_spoiler === true ? "||" : "";
+      if (emoji) emojis.push({...emoji, offset: offset + wrapper.length, length: literal.length});
+      const result = wrapper + literal + wrapper;
+      offset += result.length;
+      return result;
     })
     .join("");
 }
@@ -1803,7 +1806,9 @@ export function buildContentFromResponse(
   );
 
   /* Handle Captions */
-  const caption = buildCaptionFromFragments(postObj.post);
+  const emojis: InlineEmojiProps[] = [];
+  const textAttachmentEmojis: InlineEmojiProps[] = [];
+  const caption = buildCaptionFromFragments(postObj.post, emojis);
   const rawReplyUsername = postAppInfo.reply_to_author?.username ||
     (postIndex > 0 ? thread_items[postIndex - 1]?.post?.user?.username : undefined);
   const replyToUsername = typeof rawReplyUsername === "string"
@@ -1814,7 +1819,7 @@ export function buildContentFromResponse(
     ? postAppInfo.tag_header.display_name.trim() || undefined : undefined;
   const textAttachment = buildCaptionFromFragments({
     text_post_app_info: postAppInfo.snippet_attachment_info,
-  }) || undefined;
+  }, textAttachmentEmojis) || undefined;
   const mediaInfo = (item: any, position = 0) => ({
     position,
     spoiler: postAppInfo.is_spoiler_media === true ||
@@ -1954,12 +1959,14 @@ export function buildContentFromResponse(
   };
   if (postAppInfo.share_info?.quoted_post != null) {
     const quoted = postAppInfo.share_info.quoted_post;
+    const quotedEmojis: InlineEmojiProps[] = [];
     quotedPost = {
       username: normalizeThreadsUsername(
         quoted.user?.username || ""
       ),
       post: typeof quoted.code === "string" ? quoted.code : undefined,
-      caption: buildCaptionFromFragments(quoted),
+      caption: buildCaptionFromFragments(quoted, quotedEmojis),
+      emojis: quotedEmojis,
       poll: readPoll(quoted.caption_add_on?.poll),
       quoted: true,
     };
@@ -1977,6 +1984,8 @@ export function buildContentFromResponse(
     replyToUsername,
     topicTag,
     textAttachment,
+    emojis,
+    textAttachmentEmojis,
     title: authorName,
     images,
     post,

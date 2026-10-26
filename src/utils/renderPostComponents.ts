@@ -41,10 +41,14 @@ function postMedia(content: ContentProps): GalleryItem[] {
     }).slice(0, 10);
 }
 
-function attachmentFormatter(text: string): (limit: number) => string {
-  // Discord does not render spoiler markup inside code blocks.
-  if (parseDiscordSpoilerSegments(text).some(segment => segment.isSpoiler)) {
-    return discordTextFormatter(text);
+function attachmentFormatter(
+  text: string, emojis: InlineEmojiProps[] = [], resolved: Record<string, DiscordEmojiProps> = {}
+): (limit: number) => string {
+  // Discord does not render spoilers or emoji in code blocks. Use the same
+  // formatter for cached and missing emoji so pending placeholders stay hidden.
+  if (parseDiscordSpoilerSegments(text).some(segment => segment.isSpoiler) ||
+    emojis.length > 0) {
+    return discordTextFormatter(text, emojis, resolved);
   }
   const literal = stripDiscordSpoilerMarkers(text).replace(/`/g, "`\u200b");
   return (limit: number) => literal && limit >= 9
@@ -96,10 +100,10 @@ export function buildPostComponents(content: ContentProps): ComponentEmbed {
   const poll = formatPollPlainText(content.poll);
   const attachment = content.textAttachment || "";
   const renderers = [
-    discordTextFormatter(caption),
-    discordTextFormatter(quoteText),
+    discordTextFormatter(caption, content.emojis, content.discordEmojis),
+    discordTextFormatter(quoteText, quote?.emojis, content.discordEmojis),
     discordTextFormatter(poll),
-    attachmentFormatter(attachment),
+    attachmentFormatter(attachment, content.textAttachmentEmojis, content.discordEmojis),
   ];
   const fullText = renderers.map(render => render(4000));
   const lengths = fullText.map(text => text.length);

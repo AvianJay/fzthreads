@@ -19,6 +19,7 @@
     "express-rate-limit": "8.2.1",
     "instagram-private-api": "^1.46.1",
     "node-fetch": "^3.3.2",
+    "sharp": "^0.35.5",
     "threads-api": "^1.6.3",
     "tsx": "4.21.0"
   },

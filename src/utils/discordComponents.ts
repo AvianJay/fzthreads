@@ -1,4 +1,3 @@
-import {parseDiscordSpoilerSegments} from "./contentFormat";
 import {getThreadsUrl, publicHttpUrl} from "./utils";
 
 export type TextDisplay = {type: 10; content: string};
@@ -75,11 +74,50 @@ function textTokens(text: string): string[] {
 
 // Only the upstream spoiler markers are interpreted as markup. All generated
 // links and escaped characters remain atomic when a long preview is shortened.
-export function discordTextFormatter(text: string): (limit: number) => string {
-  const segments = parseDiscordSpoilerSegments(text).map(segment => ({
-    tokens: textTokens(segment.text),
-    wrapper: segment.isSpoiler ? "||" : "",
-  }));
+export function discordTextFormatter(
+  text: string,
+  emojis: InlineEmojiProps[] = [],
+  resolved: Record<string, DiscordEmojiProps> = {}
+): (limit: number) => string {
+  const replacements = new Map<number, {length: number; markup: string}>();
+  for (const emoji of emojis) {
+    if (!Number.isInteger(emoji.offset) || !Number.isInteger(emoji.length) ||
+      emoji.offset < 0 || emoji.length <= 0 || emoji.offset + emoji.length > text.length) continue;
+    const cached = resolved[emoji.key];
+    const available = cached && /^\d{1,20}$/.test(cached.id) && /^[A-Za-z0-9_]{2,32}$/.test(cached.name);
+    replacements.set(emoji.offset, {
+      length: emoji.length,
+      markup: available ? `<${cached.animated ? "a" : ""}:${cached.name}:${cached.id}>` : "",
+    });
+  }
+  // Interpret only extracted emoji spans. User-authored <:name:id> stays escaped.
+  // Scan the original text so escaped literal pipes do not shift emoji offsets.
+  const segments: {tokens: string[]; wrapper: string}[] = [];
+  let tokens: string[] = [];
+  let literal = "";
+  let wrapper = "";
+  const flush = () => {tokens.push(...textTokens(literal)); literal = "";};
+  for (let i = 0; i < text.length;) {
+    const emoji = replacements.get(i);
+    if (emoji) {
+      flush();
+      if (emoji.markup) tokens.push(emoji.markup);
+      i += emoji.length;
+    } else if (text.startsWith("\\|\\|", i)) {
+      literal += "||";
+      i += 4;
+    } else if (text.startsWith("||", i)) {
+      flush();
+      if (tokens.length) segments.push({tokens, wrapper});
+      tokens = [];
+      wrapper = wrapper ? "" : "||";
+      i += 2;
+    } else {
+      literal += text[i++];
+    }
+  }
+  flush();
+  if (tokens.length) segments.push({tokens, wrapper});
   const full = segments.map(({tokens, wrapper}) => wrapper + tokens.join("") + wrapper).join("");
   return (limit: number) => {
     if (limit <= 0) return "";

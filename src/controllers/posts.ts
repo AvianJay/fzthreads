@@ -5,6 +5,8 @@ import {SHARE_RESOLVE_MS} from "../utils/fetch/http";
 import renderActivity from "../utils/renderActivity";
 import renderPlayer from "../utils/renderPlayer";
 import renderSeo from "../utils/renderSeo";
+import {DiscordEmojiError, preparePostEmojis} from "../utils/discordEmojis";
+import {postEmojis} from "../utils/threadsEmojis";
 import {
   HttpError,
   decodeThreadsPostId,
@@ -13,7 +15,6 @@ import {
   normalizeThreadsPostCode,
 } from "../utils/utils";
 
-const router: express.Router = express.Router();
 const THREADS_HOSTS = new Set([
   "threads.com",
   "www.threads.com",
@@ -224,12 +225,14 @@ function sendPlayerResponse(
 async function handlePostRequest(
   req: express.Request,
   res: express.Response,
-  next: express.NextFunction
+  next: express.NextFunction,
+  dependencies: PostDependencies,
+  preload = false
 ) {
   try {
     if (!req.params.post) return next(new HttpError(400, "No post provided"));
 
-    const post = await findPost({
+    const post = await dependencies.findPost({
       post: String(req.params.post),
       userAgent: req.headers["user-agent"] || "",
     });
@@ -238,8 +241,11 @@ async function handlePostRequest(
       return next(new HttpError(404, "Post not found"));
     }
 
-    return sendPostResponse(req, res, post);
+    if (preload || postEmojis(post).length) res.set("Cache-Control", "no-store");
+    const prepared = await dependencies.prepareEmojis(post, preload);
+    return sendPostResponse(req, res, prepared);
   } catch (e: unknown) {
+    if (preload) return next(preloadError(e));
     if (isLegacyHost(req.get("host")) && wantsActivityJson(req)) {
       return next(new HttpError(502, "Unable to render activity JSON"));
     }
@@ -251,19 +257,23 @@ async function handlePostRequest(
 async function handleShareRequest(
   req: express.Request,
   res: express.Response,
-  next: express.NextFunction
+  next: express.NextFunction,
+  dependencies: PostDependencies,
+  preload = false
 ) {
   try {
     const shareCode = req.params.shareCode;
     if (!shareCode) return next(new HttpError(400, "No share code provided"));
 
-    const resolvedPost = await resolveThreadsShareCode(
+    const resolvedPost = await dependencies.resolveShare(
       String(shareCode),
       req.headers["user-agent"] || ""
     );
-    if (!resolvedPost) return redirectToOriginalThreadsShare(req, res);
+    if (!resolvedPost) return preload
+      ? next(new HttpError(502, "Unable to resolve Threads share link"))
+      : redirectToOriginalThreadsShare(req, res);
 
-    const post = await findPost({
+    const post = await dependencies.findPost({
       post: resolvedPost,
       userAgent: req.headers["user-agent"] || "",
     });
@@ -272,8 +282,11 @@ async function handleShareRequest(
       return next(new HttpError(404, "Post not found"));
     }
 
-    return sendPostResponse(req, res, post);
-  } catch {
+    if (preload || postEmojis(post).length) res.set("Cache-Control", "no-store");
+    const prepared = await dependencies.prepareEmojis(post, preload);
+    return sendPostResponse(req, res, prepared);
+  } catch (e: unknown) {
+    if (preload) return next(preloadError(e));
     return redirectToOriginalThreadsShare(req, res);
   }
 }
@@ -346,15 +359,37 @@ async function handleActivityRequest(
   }
 }
 
-// Mastodon API compatible endpoints for ActivityPub
-router.get("/api/v1/statuses/:statusId", handleActivityRequest);
-router.get("/users/:username/statuses/:statusId", handleActivityRequest);
-router.get("/t/:post/activity", handleActivityRequest);
-router.get("/:username/post/:post/activity", handleActivityRequest);
-router.get("/t/:post/player", handlePlayerRequest);
-router.get("/:username/post/:post/player", handlePlayerRequest);
-router.get("/share/:shareCode", handleShareRequest);
-router.get("/t/:post", handlePostRequest);
-router.get("/:username/post/:post", handlePostRequest);
+interface PostDependencies {
+  findPost: typeof findPost;
+  resolveShare: typeof resolveThreadsShareCode;
+  prepareEmojis: typeof preparePostEmojis;
+}
 
-export default router;
+function preloadError(error: unknown): HttpError {
+  return error instanceof DiscordEmojiError
+    ? new HttpError(error.statusCode, error.message)
+    : new HttpError(502, "Unable to preload post emojis");
+}
+
+export function createPostsRouter(overrides: Partial<PostDependencies> = {}): express.Router {
+  const router = express.Router();
+  const dependencies: PostDependencies = {
+    findPost, resolveShare: resolveThreadsShareCode, prepareEmojis: preparePostEmojis, ...overrides,
+  };
+  // Mastodon API compatible endpoints for ActivityPub
+  router.get("/api/v1/statuses/:statusId", handleActivityRequest);
+  router.get("/users/:username/statuses/:statusId", handleActivityRequest);
+  router.get("/t/:post/activity", handleActivityRequest);
+  router.get("/:username/post/:post/activity", handleActivityRequest);
+  router.get("/t/:post/player", handlePlayerRequest);
+  router.get("/:username/post/:post/player", handlePlayerRequest);
+  router.get(["/t/:post/preload", "/:username/post/:post/preload"], (req, res, next) =>
+    handlePostRequest(req, res, next, dependencies, true));
+  router.get("/share/:shareCode/preload", (req, res, next) =>
+    handleShareRequest(req, res, next, dependencies, true));
+  router.get("/share/:shareCode", (req, res, next) => handleShareRequest(req, res, next, dependencies));
+  router.get(["/t/:post", "/:username/post/:post"], (req, res, next) => handlePostRequest(req, res, next, dependencies));
+  return router;
+}
+
+export default createPostsRouter();
