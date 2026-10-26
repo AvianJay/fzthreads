@@ -48,13 +48,20 @@ export function escapeMarkdown(text: string): string {
   return text.replace(/([\\`*_{}\[\]()<>#+\-.!|~])/g, "\\$1");
 }
 
+export function markdownLinkLabel(label: string): string {
+  // Link labels are already delimited by Markdown's `[]`. Escaping every
+  // punctuation mark inside them makes Discord display the backslashes (for
+  // example `randy\_\_maimai`). Keep the normal text formatter escaped, but
+  // render generated link labels as their visible text.
+  return escapeMarkdown(label).replace(/\\([\\`*_{}\[\]()<>#+\-.!|~])/g, "$1");
+}
+
 export function markdownLink(label: string, url: string): string {
   const destination = url.replace(/\(/g, "%28").replace(/\)/g, "%29")
     .replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\\/g, "%5C");
   // These brackets and parentheses are the link delimiters themselves. Do
   // not put backslashes inside the generated `[]()` syntax.
-  const linkLabel = escapeMarkdown(label).replace(/\\([\[\]()_.-])/g, "$1");
-  return `[${linkLabel}](${destination})`;
+  return `[${markdownLinkLabel(label)}](${destination})`;
 }
 
 function textTokens(text: string): string[] {

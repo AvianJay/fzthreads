@@ -1,5 +1,5 @@
 import {getThreadsUrl, normalizeThreadsUsername, publicHttpUrl} from "./utils";
-import {authorBadges, componentScript} from "./discordComponents";
+import {authorBadges, componentScript, markdownLinkLabel} from "./discordComponents";
 
 type TextDisplay = {type: 10; content: string};
 type ProfileComponent =
@@ -34,7 +34,7 @@ function formatBiography(text: string, maxLength: number): string {
     const handle = match[1]?.replace(/\.+$/, "");
     if (handle && handle.length <= 30) {
       const plain = `@${handle}`;
-      parts.push({plain, markdown: `[${escapeMarkdown(plain).replace(/\\([\[\]()_.-])/g, "$1")}](${getThreadsUrl(handle)})`});
+      parts.push({plain, markdown: `[${markdownLinkLabel(plain)}](${getThreadsUrl(handle)})`});
       literal(match[0].slice(plain.length));
     } else {
       literal(match[0]);
@@ -61,8 +61,7 @@ function formatBiography(text: string, maxLength: number): string {
 }
 
 function markdownLink(label: string, url: string): string {
-  const name = truncate(escapeMarkdown(label.trim().replace(/\s+/g, " ") || "連結")
-    .replace(/\\([\[\]()_.-])/g, "$1"), 80);
+  const name = truncate(markdownLinkLabel(label.trim().replace(/\s+/g, " ") || "連結"), 80);
   // Parentheses in valid URLs must not terminate the Markdown destination.
   const destination = url.replace(/\(/g, "%28").replace(/\)/g, "%29");
   return `[${name}](${destination})`;
@@ -92,8 +91,7 @@ export function buildProfileComponents(content: ContentProps) {
 
   const badges = authorBadges(profile);
 
-  const headingLabel = truncate(escapeMarkdown(profile.displayName || username)
-    .replace(/\\([\[\]()_.-])/g, "$1"), 256);
+  const headingLabel = truncate(markdownLinkLabel(profile.displayName || username), 256);
   const heading: TextDisplay = {
     type: 10,
     content: `### [${headingLabel}](${getThreadsUrl(username)})${badges ? ` ${badges}` : ""}\n${escapeMarkdown(username)}${profile.isPrivate === true ? "\n-# 🔒" : ""}`,

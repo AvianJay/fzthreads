@@ -138,6 +138,8 @@ test("the uploaded avatar uses the reference CV2 heading and the old thumbnail i
   assert.match(first.content, /\n\n不負責民調 看看\?/);
   assert.match(ready.component.components.at(-1)?.type === 10 ? ready.component.components.at(-1).content : "", /<t:1789749600:f>/);
   assert.equal(markdownLink("Nicko", "https://www.threads.com/@nicko948787"), "[Nicko](https://www.threads.com/@nicko948787)");
+  assert.equal(markdownLink("a.b|c!_[]()", "https://www.threads.com/@nicko948787"),
+    "[a.b|c!_[]()](https://www.threads.com/@nicko948787)");
 
   const fallback = buildPostComponents({...post, discordEmojis: {}});
   assert.deepEqual(fallback.component.components.map(component => component.type), [9, 10]);

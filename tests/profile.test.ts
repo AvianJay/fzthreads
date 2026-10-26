@@ -148,7 +148,7 @@ test("inline JSON and Markdown remain safe, with OG/oEmbed preserved and legacy 
   const json = html.match(/<script id="discord:component-embed" type="application\/json">(.*?)<\/script>/s)![1];
   assert.doesNotMatch(json, /[<>&]/);
   assert.ok(textOf(JSON.parse(json)).includes("[Name](https://bad.test)"));
-  assert.ok(textOf(JSON.parse(json)).includes("[[x](bad) \\</script\\>\\<script\\>](https://example.com/path%28test%29?a=1&b=2)"));
+  assert.ok(textOf(JSON.parse(json)).includes("[[x](bad) </script><script>](https://example.com/path%28test%29?a=1&b=2)"));
   assert.match(html, /property="og:title"/);
   assert.match(html, /property="og:image"/);
   assert.match(html, /application\/json\+oembed/);
