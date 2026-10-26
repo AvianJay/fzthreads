@@ -18,6 +18,13 @@ export type ComponentEmbed = {
 // This is a byte limit on the escaped JSON, including media URLs and metadata.
 export const COMPONENT_EMBED_MAX_BYTES = 3000;
 
+export function authorBadges(author: {isVerified?: boolean; isFederated?: boolean}): string {
+  return [
+    author.isVerified === true ? "<:verified:1557576231770128496>" : "",
+    author.isFederated === true ? "<:fediverse:1564218539814944908>" : "",
+  ].filter(Boolean).join(" ");
+}
+
 export function componentJson(payload: ComponentEmbed): string {
   return JSON.stringify(payload)
     .replace(/</g, "\\u003c")

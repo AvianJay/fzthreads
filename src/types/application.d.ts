@@ -83,6 +83,7 @@ interface ContentProps {
   authorName?: string;
   authorDisplayName?: string;
   isVerified?: boolean;
+  isFederated?: boolean;
   authorUrl?: string;
   authorIcon?: string;
   footerName?: string;

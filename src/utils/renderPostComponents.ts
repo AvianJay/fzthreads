@@ -4,6 +4,7 @@ import {
   DiscordComponent,
   GalleryItem,
   TextDisplay,
+  authorBadges,
   componentJson,
   componentScript,
   discordTextFormatter,
@@ -76,8 +77,9 @@ export function buildPostComponents(content: ContentProps): ComponentEmbed {
   const profileUrl = getThreadsUrl(username);
   const displayName = content.authorDisplayName ||
     formatThreadsAuthorName(content.authorName, username).replace(` (@${username})`, "");
+  const badges = authorBadges(content);
   const author = `**${markdownLink(truncateText(displayName, 128), profileUrl)}**` +
-    (content.isVerified === true ? " <:verified:1557576231770128496>" : "");
+    (badges ? ` ${badges}` : "");
   const topic = content.topicTag?.trim();
   const handle = markdownLink(username, profileUrl) + (topic
     ? ` > ${markdownLink(truncateText(topic, 80), `https://www.threads.com/search?q=${encodeURIComponent(topic)}`)}` : "");

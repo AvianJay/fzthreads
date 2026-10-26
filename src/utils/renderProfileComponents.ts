@@ -1,5 +1,5 @@
 import {getThreadsUrl, normalizeThreadsUsername, publicHttpUrl} from "./utils";
-import {componentScript} from "./discordComponents";
+import {authorBadges, componentScript} from "./discordComponents";
 
 type TextDisplay = {type: 10; content: string};
 type ProfileComponent =
@@ -89,14 +89,11 @@ export function buildProfileComponents(content: ContentProps) {
     .filter((link): link is {url: string; title: string} => Boolean(link.url));
   if (links) stats.push(`🔗 ${links.length}`);
 
-  const badges: string[] = [];
-  if (profile.isVerified === true) badges.push("✅");
-  if (profile.isPrivate === true) badges.push("🔒");
-  if (profile.isFederated === true) badges.push("🌐");
+  const badges = authorBadges(profile);
 
   const heading: TextDisplay = {
     type: 10,
-    content: `### [${truncate(escapeMarkdown(profile.displayName || username), 256)}](${getThreadsUrl(username)})\n${escapeMarkdown(username)}${badges.length ? `\n-# ${badges.join(" · ")}` : ""}`,
+    content: `### [${truncate(escapeMarkdown(profile.displayName || username), 256)}](${getThreadsUrl(username)})${badges ? ` ${badges}` : ""}\n${escapeMarkdown(username)}${profile.isPrivate === true ? "\n-# 🔒" : ""}`,
   };
   const profileLinks = (links || []).slice(0, 5).map(link => markdownLink(link.title, link.url));
   const instagramUrl = publicHttpUrl(profile.instagramUrl, 512);

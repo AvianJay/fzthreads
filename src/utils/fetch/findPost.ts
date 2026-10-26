@@ -573,7 +573,7 @@ export function getPostPageVariables(postID: string, isLoggedIn = false): string
     __relay_internal__pv__BarcelonaHasPostAuthorNotifControlsrelayprovider:
       true,
     __relay_internal__pv__BarcelonaShouldShowFediverseM1Featuresrelayprovider:
-      false,
+      true,
     __relay_internal__pv__BarcelonaHasInlineReplyComposerrelayprovider: false,
     __relay_internal__pv__BarcelonaHasDearAlgoConsumptionrelayprovider: true,
     __relay_internal__pv__BarcelonaHasEventBadgerelayprovider: false,
@@ -2002,6 +2002,7 @@ export function buildContentFromResponse(
     authorName,
     authorDisplayName: postObj.post.user.full_name || username,
     isVerified: postObj.post.user.is_verified === true,
+    isFederated: postObj.post.user.text_post_app_has_fediverse_enabled === true,
     authorUrl: `https://www.threads.com/@${username}`,
     authorIcon: postObj.post.user.profile_pic_url,
     footerName: "Threads",

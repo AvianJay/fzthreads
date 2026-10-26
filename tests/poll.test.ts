@@ -176,6 +176,7 @@ test("hidden polls are enriched once; failure, unavailable data and mismatches r
 test("authenticated post queries use logged-in variables, including bearer requests", () => {
   assert.equal(JSON.parse(getPostPageVariables("123")).__relay_internal__pv__BarcelonaIsLoggedInrelayprovider, false);
   assert.equal(JSON.parse(getPostPageVariables("123", true)).__relay_internal__pv__BarcelonaIsLoggedInrelayprovider, true);
+  assert.equal(JSON.parse(getPostPageVariables("123")).__relay_internal__pv__BarcelonaShouldShowFediverseM1Featuresrelayprovider, true);
 });
 
 test("the logged-in example's results match Threads percentages and total", () => {

@@ -6,7 +6,7 @@ import {test} from "node:test";
 import express from "express";
 import fetch from "node-fetch";
 import {sendPostResponse} from "../src/controllers/posts";
-import {buildContentFromResponse} from "../src/utils/fetch/findPost";
+import {buildContentFromResponse, enrichPostPoll} from "../src/utils/fetch/findPost";
 import {
   ComponentEmbed,
   componentJson,
@@ -180,13 +180,67 @@ test("polls and quoted polls retain options, totals, percentages and unavailable
   assert.ok(textOf(buildPostComponents(post)).includes("選項與票數暫時無法取得"));
 });
 
-test("only explicit verification/media flags create badges or spoilers, and topic URLs are encoded", () => {
+test("DeP23AyE-3V poll results reach CV2 and legacy previews after authenticated enrichment", async () => {
+  // Public poll results observed on the user's example; no session data is stored.
+  const postCode = "DeP23AyE-3V";
+  const response = (tallies: {text: string; count: number}[] | null) => ({
+    data: {data: {edges: [{node: {thread_items: [{post: {
+      code: postCode,
+      user: {username: "power3067830678", full_name: "陳之漢", is_verified: true,
+        profile_pic_url: "https://example.com/avatar.jpg"},
+      caption: {text: "不負責民調 □看看?\n2026台北市長你愛誰"},
+      text_post_app_info: {repost_count: 15, direct_reply_count: 949, reshare_count: 94},
+      like_count: 1819,
+      taken_at: 1791493470,
+      caption_add_on: {poll: {
+        poll_id: "17934930039395754", expires_at: null, finished: true, tallies,
+      }},
+    }}]}}]}},
+  });
+  let authenticatedCalls = 0;
+  const upstream = await enrichPostPoll(response(null), postCode, async () => {
+    authenticatedCalls++;
+    return response([{text: "將萬安", count: 18203}, {text: "沈柏洋", count: 14025}]);
+  });
+  assert.equal(authenticatedCalls, 1);
+  const parsed = buildContentFromResponse(upstream, postCode, "4003659868678647253");
+  assert.ok(parsed);
+  const post = {...parsed, userAgent: "Discordbot/2.0"};
+  assert.equal(post.poll?.votesCount, 32228);
+  const html = renderSeo({type: "post", content: post, host: "fzthreads.com"});
+  const json = html.match(/<script id="discord:component-embed" type="application\/json">(.*?)<\/script>/s)![1];
+  const value = JSON.parse(json) as ComponentEmbed;
+  assertValid(value);
+  const legacy = renderSeo({type: "post", content: post, host: "l.fzthreads.com"});
+  assert.doesNotMatch(legacy, /discord:component-embed/);
+  for (const output of [textOf(value), legacy, renderActivity(post).text]) {
+    for (const expected of ["投票（已結束）", "將萬安 — 56%（18,203 票）",
+      "沈柏洋 — 44%（14,025 票）", "共 32,228 票"]) {
+      assert.ok(output.includes(expected), `Missing poll result: ${expected}`);
+    }
+    assert.ok(!output.includes("選項與票數暫時無法取得"));
+  }
+});
+
+test("author badges stay ordered and require explicit status flags, as do media spoilers", () => {
+  for (const [isVerified, isFederated, expected] of [
+    [true, true, " <:verified:1557576231770128496> <:fediverse:1564218539814944908>"],
+    [false, true, " <:fediverse:1564218539814944908>"],
+    [true, false, " <:verified:1557576231770128496>"],
+    [false, false, ""],
+  ] as const) {
+    const raw = rawPost();
+    Object.assign(raw.user, {is_verified: isVerified, text_post_app_has_fediverse_enabled: isFederated});
+    const value = buildPostComponents(content(raw));
+    assert.equal(textOf(value).split("\n")[0], `**[Nicko](https://www.threads.com/@nicko948787)**${expected}`);
+    assertValid(value);
+  }
   for (const flag of [false, null, undefined, "true", "false", 1]) {
     const raw = rawPost();
-    Object.assign(raw.user, {is_verified: flag});
+    Object.assign(raw.user, {is_verified: flag, text_post_app_has_fediverse_enabled: flag});
     Object.assign(raw.text_post_app_info, {is_spoiler_media: flag, tag_header: {display_name: "台灣 & A/B"}});
     const value = buildPostComponents(content(raw));
-    assert.doesNotMatch(textOf(value), /verified:/);
+    assert.doesNotMatch(textOf(value), /verified:|fediverse:/);
     assert.ok(gallery(value).every(item => item.spoiler !== true));
     assert.ok(textOf(value).includes("https://www.threads.com/search?q=%E5%8F%B0%E7%81%A3%20%26%20A%2FB"));
   }

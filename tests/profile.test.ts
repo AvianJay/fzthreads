@@ -281,10 +281,18 @@ test("only explicit public flags produce status badges", () => {
   const value = payload({...user, is_verified: true, text_post_app_is_private: true,
     text_post_app_has_fediverse_enabled: true});
   const text = textOf(value);
-  assert.ok(text.includes("-# ✅ · 🔒 · 🌐"));
+  assert.ok(text.startsWith("### [尼摳](https://www.threads.com/@nicko948787) <:verified:1557576231770128496> <:fediverse:1564218539814944908>\n"));
+  assert.ok(text.includes("-# 🔒"));
+  assert.doesNotMatch(text, /✅|🌐/);
+  const federated = textOf(payload({...user, is_verified: false, text_post_app_has_fediverse_enabled: true}));
+  assert.ok(federated.startsWith("### [尼摳](https://www.threads.com/@nicko948787) <:fediverse:1564218539814944908>\n"));
+  assert.doesNotMatch(federated, /verified:/);
+  const verified = textOf(payload({...user, is_verified: true, text_post_app_has_fediverse_enabled: false}));
+  assert.ok(verified.startsWith("### [尼摳](https://www.threads.com/@nicko948787) <:verified:1557576231770128496>\n"));
+  assert.doesNotMatch(verified, /fediverse:/);
   for (const flag of [false, null, undefined, "true", "false", 1]) {
     assert.doesNotMatch(textOf(payload({...user, is_verified: flag,
-      text_post_app_is_private: flag, text_post_app_has_fediverse_enabled: flag})), /✅|🔒|🌐/);
+      text_post_app_is_private: flag, text_post_app_has_fediverse_enabled: flag})), /verified:|fediverse:|🔒/);
   }
   // Instagram privacy must not be mistaken for the Threads privacy setting.
   assert.doesNotMatch(textOf(payload({...user, is_private: true})), /🔒/);
