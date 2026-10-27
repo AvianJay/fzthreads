@@ -46,6 +46,12 @@ const PAGE_CONTEXT_BACKGROUND_FETCH_MS = 8_000;
 const PAGE_CONTEXT_INVALIDATE_COOLDOWN_MS = 15_000;
 const IG_BOOTSTRAP_CACHE_MS = 60 * 60 * 1000;
 const LOGIN_COOKIE_CACHE_MS = 60 * 1000;
+// Meta can reject logged-out queries from our IP for long stretches (401).
+// While it does, go straight to the login cookie instead of spending ~1.5s
+// of the response budget on anonymous retries and fallbacks.
+const ANONYMOUS_QUERY_BLOCKED_MS = 15 * 60 * 1000;
+// The legacy endpoint is rate limited per IP; stop hitting it for a while.
+const LEGACY_RATE_LIMIT_COOLDOWN_MS = 15 * 60 * 1000;
 const THREADS_WEB_SESSION_ID_LENGTH = 6;
 const THREADS_SEC_CH_UA =
   '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"';
@@ -89,6 +95,8 @@ let igBootstrapInflight: Promise<string | undefined> | undefined;
 let loginCookieCache:
   | {header: string | undefined; fetchedAt: number}
   | undefined;
+let anonymousQueryBlockedUntil = 0;
+let legacyRateLimitedUntil = 0;
 
 function evictOldestEntries(map: Map<string, unknown>, maxEntries: number) {
   while (map.size > maxEntries) {
@@ -1237,6 +1245,11 @@ async function fetchThreadsPostPageQuery(
     }
   }
 
+  if (!authorization && !cookieHeader && primaryResult?.status === 401) {
+    anonymousQueryBlockedUntil = Date.now() + ANONYMOUS_QUERY_BLOCKED_MS;
+    writeRuntimeDebug("findPost:postPageQuery:anonymousBlocked", {postID});
+  }
+
   return primaryResult?.responseJson;
 }
 
@@ -1315,7 +1328,17 @@ async function fetchThreadsLegacyPostQuery(
     body: finalFormBody,
   });
 
-  return await fetchThreadsAPI.json();
+  const responseJson: any = await fetchThreadsAPI.json();
+  const errorMessage = responseJson?.errors?.[0]?.message;
+  if (
+    !authorization &&
+    typeof errorMessage === "string" &&
+    errorMessage.includes("limit exceeded")
+  ) {
+    legacyRateLimitedUntil = Date.now() + LEGACY_RATE_LIMIT_COOLDOWN_MS;
+    writeRuntimeDebug("findPost:legacyQuery:rateLimited", {postID});
+  }
+  return responseJson;
 }
 
 function formatStatsLine(
@@ -1494,13 +1517,20 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
   let legacySettled: QueryOutcome | null = null;
 
   const directQueryPromise: Promise<QueryOutcome> = (async () => {
-    const anonymousResult = await fetchThreadsPostPageQueryWithRetries({
-      postCode: post,
-      postID,
-      threadID,
-      step: "findPost:directQuery:attempt",
-      deadline,
-    });
+    const skipAnonymous =
+      Boolean(loginCookieHeader) && Date.now() < anonymousQueryBlockedUntil;
+    if (skipAnonymous) {
+      writeRuntimeDebug("findPost:directQuery:skipAnonymous", {post});
+    }
+    const anonymousResult = skipAnonymous
+      ? undefined
+      : await fetchThreadsPostPageQueryWithRetries({
+          postCode: post,
+          postID,
+          threadID,
+          step: "findPost:directQuery:attempt",
+          deadline,
+        });
 
     if (
       hasPostData(anonymousResult) &&
@@ -1569,10 +1599,14 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
     return {source: "direct" as const, result: null, hasData: false};
   });
 
-  const legacyQueryPromise: Promise<QueryOutcome> = fetchThreadsLegacyPostQuery(
-    postID,
-    undefined,
-    deadline
+  const legacyRateLimited = Date.now() < legacyRateLimitedUntil;
+  if (legacyRateLimited) {
+    writeRuntimeDebug("findPost:legacyQuery:skipRateLimited", {post});
+  }
+  const legacyQueryPromise: Promise<QueryOutcome> = (
+    legacyRateLimited
+      ? Promise.resolve(null)
+      : fetchThreadsLegacyPostQuery(postID, undefined, deadline)
   ).then(result => ({
     source: 'legacy' as const,
     result,
@@ -1711,16 +1745,22 @@ async function loadPost(post: string): Promise<Omit<ContentProps, "userAgent"> |
       (fetchThreadsAPIJson.errors[0].message &&
         fetchThreadsAPIJson.errors[0].message.includes("limit exceeded"))
     ) {
+      // Past the deadline the response is already late; another round trip
+      // only delays the failure.
+      if (deadline.expired()) return false;
       let fetchWithAuth: any;
       let generalFetchAuthErr = false;
       try {
         let newToken = await login();
-        if (newToken == false) {
+        // Only a bearer token fits the legacy query's Authorization header.
+        // A cookie credential was already tried by the direct query, and
+        // refreshing it just re-applies the same cookie.
+        if (newToken == false || !newToken.token.startsWith("Bearer ")) {
           return false;
         } else {
           fetchWithAuth = await fetchThreadsLegacyPostQuery(
             postID,
-            newToken.token ? newToken.token : "",
+            newToken.token,
             deadline
           );
           fetchThreadsAPIJson = fetchWithAuth;
