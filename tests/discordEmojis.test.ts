@@ -440,6 +440,8 @@ test("emoji downloads reject unsafe sources/redirects and oversize bodies", asyn
   assert.equal(calls, 1);
   await assert.rejects(downloadEmojiImage(url, async () =>
     new Response("large", {headers: {"content-length": String(6 * 1024 * 1024)}})), /too large/);
+  await assert.rejects(downloadEmojiImage(url, async () =>
+    new Response(null, {status: 410})), /HTTP 410/);
 });
 
 test("image conversion bounds file size/dimensions and retains multiple animated frames", async () => {

@@ -26,7 +26,7 @@ export async function downloadEmojiImage(url: string, fetchImage: EmojiFetch = f
     }
     if (!response.ok) {
       if (response.body instanceof Readable) response.body.destroy();
-      throw new Error("Unable to download emoji image");
+      throw new Error(`Unable to download emoji image (HTTP ${response.status})`);
     }
     if (Number(response.headers.get("content-length")) > MAX_DOWNLOAD_BYTES) {
       if (response.body instanceof Readable) response.body.destroy();

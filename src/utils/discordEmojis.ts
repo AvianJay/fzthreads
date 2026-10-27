@@ -35,6 +35,16 @@ function positiveInteger(value: unknown, fallback: number, max: number): number 
   return Number.isInteger(number) && number > 0 ? Math.min(number, max) : fallback;
 }
 
+function safeUploadErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/https?:\/\/[^\s)]+/gi, "[url]")
+    .replace(/(?:Bot|Bearer)\s+\S+/gi, "[credential]")
+    .replace(/COOKIE:\S+/gi, "COOKIE:[redacted]")
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, 240) || "unknown error";
+}
+
 function readEmoji(value: any): DiscordEmojiProps | undefined {
   if (!value || typeof value.id !== "string" || !/^\d{1,20}$/.test(value.id) ||
     typeof value.name !== "string" || value.name.length < 2 || value.name.length > 32) return;
@@ -167,8 +177,10 @@ export class DiscordEmojiCache {
       this.failures.delete(source.key);
       this.failures.set(source.key, this.now() + FAILURE_RETRY_MS);
       if (this.failures.size > 4000) this.failures.delete(this.failures.keys().next().value!);
-      const safeError = error instanceof DiscordEmojiError ? error : new DiscordEmojiError();
-      console.warn(`[DiscordEmoji] ${safeError.message}`);
+      const safeError = error instanceof DiscordEmojiError
+        ? error
+        : new DiscordEmojiError(`Discord emoji upload failed: ${safeUploadErrorMessage(error)}`);
+      console.warn(`[DiscordEmoji] ${safeError.message} key=${source.key}`);
       throw safeError;
     }).finally(() => {this.inflight.delete(source.key);});
     this.inflight.set(source.key, task);
