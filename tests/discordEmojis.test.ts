@@ -466,6 +466,29 @@ test("image conversion bounds file size/dimensions and retains multiple animated
   await assert.rejects(encodeEmojiImage(Buffer.from('<svg width="1" height="1"></svg>')));
 });
 
+test("complex animated emoji are reduced below Discord's limit without dropping animation", async () => {
+  const width = 64;
+  const frameHeight = 64;
+  const pages = 80;
+  const pixels = Buffer.alloc(width * frameHeight * pages * 4);
+  for (let frame = 0; frame < pages; frame++) {
+    for (let i = 0; i < width * frameHeight; i++) {
+      const offset = (frame * width * frameHeight + i) * 4;
+      pixels[offset] = (frame * 37 + i * 11) % 256;
+      pixels[offset + 1] = (frame * 17 + i * 7) % 256;
+      pixels[offset + 2] = (frame * 13 + i * 3) % 256;
+      pixels[offset + 3] = 255;
+    }
+  }
+  const gif = await sharp(pixels, {raw: {width, height: frameHeight * pages, channels: 4, pageHeight: frameHeight}})
+    .gif({delay: Array.from({length: pages}, () => 40)}).toBuffer();
+  const encoded = await encodeEmojiImage(gif);
+  const image = Buffer.from(encoded.split(",")[1], "base64");
+  const metadata = await sharp(image, {animated: true}).metadata();
+  assert.ok(image.length <= MAX_EMOJI_BYTES);
+  assert.equal(metadata.pages, pages);
+});
+
 test("avatar conversion applies a transparent circular mask", async () => {
   const png = await sharp({create: {width: 300, height: 200, channels: 4, background: {r: 255, g: 0, b: 0, alpha: 1}}}).png().toBuffer();
   const encoded = await encodeEmojiImage(png, {circle: true});

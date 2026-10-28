@@ -51,7 +51,15 @@ export async function encodeEmojiImage(input: Buffer, imageOptions: EmojiImageOp
     (metadata.width || 0) <= 128 && (metadata.pageHeight || metadata.height || 0) <= 128) {
     return `data:image/gif;base64,${input.toString("base64")}`;
   }
-  for (const size of [128, 96, 64]) {
+  const gifSizes = [
+    {size: 128, colours: 128, effort: 3},
+    {size: 96, colours: 64, effort: 5},
+    {size: 64, colours: 32, effort: 8},
+    {size: 48, colours: 24, effort: 10},
+    {size: 32, colours: 16, effort: 10},
+    {size: 24, colours: 8, effort: 10},
+  ];
+  for (const {size, colours, effort} of gifSizes) {
     let pipeline = sharp(input, options).resize(size, size, {
       fit: imageOptions.circle ? "cover" : "contain",
       background: {r: 0, g: 0, b: 0, alpha: 0},
@@ -62,7 +70,7 @@ export async function encodeEmojiImage(input: Buffer, imageOptions: EmojiImageOp
     }
     pipeline = pipeline.timeout({seconds: 10});
     const output = await (animated
-      ? pipeline.gif({colours: size === 128 ? 128 : 64, effort: 3})
+      ? pipeline.gif({colours, effort, dither: 0})
       : pipeline.png()).toBuffer();
     if (output.length <= MAX_EMOJI_BYTES) {
       return `data:image/${animated ? "gif" : "png"};base64,${output.toString("base64")}`;
